@@ -3,6 +3,11 @@ const express = require('express');
 const cors = require('cors');
 const connectDB = require('./config/db');
 
+// Import routes
+const authRoutes = require('./routes/authRoutes');
+const transactionRoutes = require('./routes/transactionRoutes');
+const analyticsRoutes = require('./routes/analyticsRoutes');
+
 const app = express();
 
 app.use(cors());
@@ -14,6 +19,11 @@ app.get('/api/health', (req, res) => {
     message: 'Server is running'
   });
 });
+
+// Mount routes
+app.use('/api/auth', authRoutes);
+app.use('/api/transactions', transactionRoutes);
+app.use('/api/analytics', analyticsRoutes);
 
 const startServer = async () => {
   await connectDB();
