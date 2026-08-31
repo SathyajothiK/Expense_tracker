@@ -47,8 +47,8 @@ export default function Navbar({ activeTab = 'Home', onTabChange }) {
   };
 
   return (
-    <header className="sticky top-0 z-50 w-full bg-[#12100E]/85 backdrop-blur-2xl border-b border-[#D4AF37]/20 shadow-[0_4px_30px_rgba(0,0,0,0.8)]">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+    <header className="sticky top-0 z-50 w-full bg-[#12100E]/90 backdrop-blur-2xl border-b border-[#D4AF37]/20 shadow-[0_4px_30px_rgba(0,0,0,0.8)]">
+      <div className="max-w-[1440px] mx-auto w-full px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
         
         {/* ========================================================================= */}
         {/* LEFT: BRAND LOGO WITH GOLD CREST                                         */}
@@ -74,9 +74,6 @@ export default function Navbar({ activeTab = 'Home', onTabChange }) {
                 style={{ fontFamily: '"Playfair Display", Georgia, serif' }}
               >
                 Spend<span className="gold-metallic-text font-bold">Wise</span>
-              </span>
-              <span className="text-[9px] font-semibold uppercase tracking-widest px-1.5 py-0.5 rounded bg-[#D4AF37]/15 border border-[#D4AF37]/30 text-[#E6C667]">
-                Privé
               </span>
             </div>
             <span className="text-[9px] uppercase tracking-[0.2em] text-[#A19B91] font-medium hidden sm:block">

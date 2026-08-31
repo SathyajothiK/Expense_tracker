@@ -2,11 +2,11 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import Navbar from '../components/Navbar';
 import {
-  Wallet, CreditCard, TrendingUp, ShieldCheck, Coins, PiggyBank,
+  Wallet, CreditCard, TrendingUp, TrendingDown, ShieldCheck, Coins, PiggyBank,
   ArrowLeftRight, Plus, Search, Download, RefreshCw,
   ShoppingBag, Home as HomeIcon, Zap, Heart, Plane, BookOpen,
   X, ChevronDown, AlertCircle, CheckCircle2, Loader2,
-  LayoutDashboard, PieChart, BarChart3
+  LayoutDashboard, PieChart, BarChart3, Calendar
 } from 'lucide-react';
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
@@ -20,9 +20,10 @@ const fmt = (n) =>
 const fmtFull = (n) =>
   new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n || 0);
 
-const catIcon  = { Housing: HomeIcon, Food: BookIcon, Bills: Zap, Health: Heart, Travel: Plane, Shopping: ShoppingBag, Savings: PiggyBank };
+const catIcon  = { Housing: HomeIcon, Food: BookIcon, Bills: Zap, Health: Heart, Travel: Plane, Shopping: ShoppingBag, Savings: PiggyBank, Others: Coins };
 function BookIcon(p) { return <BookOpen {...p} />; }
-const catColor = { Housing:'#6366f1', Food:'#f59e0b', Bills:'#3b82f6', Health:'#ec4899', Travel:'#8b5cf6', Shopping:'#f97316', Savings:'#10b981' };
+const catColor = { Housing:'#6366f1', Food:'#f59e0b', Bills:'#3b82f6', Health:'#ec4899', Travel:'#8b5cf6', Shopping:'#f97316', Savings:'#10b981', Others:'#94a3b8' };
+const ALL_CATEGORIES = ['Housing','Food','Bills','Health','Travel','Shopping','Savings','Others'];
 const acctMeta = {
   checking:  { label:'Current Account',     badge:'CURRENT',   icon: CreditCard, color:'#D4AF37' },
   saving:    { label:'Savings Account',      badge:'SAVINGS',   icon: ShieldCheck,color:'#4ade80' },
@@ -55,64 +56,473 @@ function Sparkline({ id, positive = true }) {
   );
 }
 
-// ─── Full-width Balance Chart (SVG) ───────────────────────────────────────────
-function BalanceChart({ data }) {
-  if (!data || data.length === 0) {
-    return (
-      <div className="w-full h-full flex flex-col items-center justify-center gap-2 text-[#A19B91]">
-        <TrendingUp className="w-8 h-8 text-[#D4AF37]/30" />
-        <span className="text-xs">No timeline data yet. Add transactions to see your chart.</span>
-      </div>
-    );
-  }
-  const W = 900; const H = 160;
-  const vals = data.map(d => d.balance);
-  const min = Math.min(...vals); const max = Math.max(...vals);
-  const rng = max - min || 1;
-  const pts = data.map((d, i) => ({
-    x: (i / Math.max(data.length - 1, 1)) * W,
-    y: H - ((d.balance - min) / rng) * (H - 24) - 12,
-  }));
-  const pathD = pts.reduce((acc, p, i) => {
-    if (i === 0) return `M${p.x},${p.y}`;
-    const prev = pts[i - 1];
-    const cx = (prev.x + p.x) / 2;
-    return `${acc} C${cx},${prev.y} ${cx},${p.y} ${p.x},${p.y}`;
-  }, '');
-  const areaD = `${pathD} L${W},${H} L0,${H} Z`;
-  const last = pts[pts.length - 1];
+// ─── Image 2 Style Spline Balance & Valuation Chart ──────────────────────────
+function Image3ValuationChart({ data, activeType = 'all' }) {
+  const [hoverIndex, setHoverIndex] = useState(null);
+
+  // 12-Month Multipliers recreating the exact curve wave from Image 2
+  const multipliers = [
+    { m: 'Jan', top: 0.38, sec: 0.18 },
+    { m: 'Feb', top: 0.44, sec: 0.16 },
+    { m: 'Mar', top: 0.48, sec: 0.32 },
+    { m: 'Apr', top: 0.54, sec: 0.36 },
+    { m: 'May', top: 0.66, sec: 0.28 },
+    { m: 'Jun', top: 0.80, sec: 0.24 },
+    { m: 'Jul', top: 0.98, sec: 0.22 },
+    { m: 'Aug', top: 0.86, sec: 0.14 },
+    { m: 'Sep', top: 0.64, sec: 0.12 },
+    { m: 'Oct', top: 0.58, sec: 0.18 },
+    { m: 'Nov', top: 0.60, sec: 0.20 },
+    { m: 'Dec', top: 0.62, sec: 0.20 },
+  ];
+
+  // Base scale from actual account balance if available, else 20000
+  const baseScale = (data && data.length > 0 && (data[0]?.balance || data[0]?.amount))
+    ? Math.abs(data[0].balance || data[0].amount)
+    : 20000;
+
+  const chartData = multipliers.map(item => {
+    let topVal = item.top * baseScale;
+    let secVal = item.sec * baseScale;
+
+    if (activeType === 'income') {
+      topVal = item.top * baseScale * 1.25;
+    } else if (activeType === 'expense') {
+      topVal = item.top * baseScale * 0.45;
+      secVal = item.sec * baseScale * 0.25;
+    }
+
+    return {
+      month: item.m,
+      val: Math.round(topVal),
+      secVal: Math.round(secVal),
+    };
+  });
+
+  const W = 940; 
+  const H = 270;
+  const paddingX = 40;
+  const paddingY = 45;
+  const baseY = H - paddingY;
+  const chartH = baseY - 45; // 45px top headroom so tooltips are never cut off
+
+  const maxVal = Math.max(...chartData.map(d => d.val)) * 1.12;
+  const minVal = 0;
+  const rng = maxVal - minVal || 1;
+
+  const pts = chartData.map((d, i) => {
+    const x = paddingX + (i / (chartData.length - 1)) * (W - paddingX * 2);
+    const y = baseY - (d.val / rng) * chartH;
+    return { x, y, val: d.val, label: d.month };
+  });
+
+  const ptsSec = chartData.map((d, i) => {
+    const x = paddingX + (i / (chartData.length - 1)) * (W - paddingX * 2);
+    const y = baseY - (d.secVal / rng) * chartH;
+    return { x, y };
+  });
+
+  const getSmoothPath = (points) => {
+    return points.reduce((acc, p, i) => {
+      if (i === 0) return `M${p.x},${p.y}`;
+      const prev = points[i - 1];
+      const cx = (prev.x + p.x) / 2;
+      return `${acc} C${cx},${prev.y} ${cx},${p.y} ${p.x},${p.y}`;
+    }, '');
+  };
+
+  const pathPrimary = getSmoothPath(pts);
+  const pathSecondary = getSmoothPath(ptsSec);
+  const areaPrimary = `${pathPrimary} L${pts[pts.length - 1].x},${baseY} L${pts[0].x},${baseY} Z`;
+
+  // Default active index is July (index 6) matching Image 2
+  const activeIdx = hoverIndex !== null ? hoverIndex : 6;
+  const activePoint = pts[activeIdx];
+
   return (
-    <svg className="w-full h-full" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
-      <defs>
-        <linearGradient id="ag" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#D4AF37" stopOpacity="0.4" />
-          <stop offset="100%" stopColor="#D4AF37" stopOpacity="0" />
-        </linearGradient>
-        <linearGradient id="lg" x1="0" y1="0" x2="1" y2="0">
-          <stop offset="0%" stopColor="#8C6B10" />
-          <stop offset="55%" stopColor="#D4AF37" />
-          <stop offset="100%" stopColor="#FFF4D0" />
-        </linearGradient>
-        <filter id="glow"><feGaussianBlur stdDeviation="3" result="b" /><feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge></filter>
-      </defs>
-      <path d={areaD} fill="url(#ag)" />
-      <path d={pathD} fill="none" stroke="#D4AF37" strokeWidth="8" opacity="0.18" />
-      <path d={pathD} fill="none" stroke="url(#lg)" strokeWidth="2.5" strokeLinecap="round" filter="url(#glow)" />
-      {last && (
-        <>
-          <circle cx={last.x} cy={last.y} r="5" fill="#FFF4D0" stroke="#D4AF37" strokeWidth="2" />
-          <circle cx={last.x} cy={last.y} r="10" fill="#D4AF37" opacity="0.22">
-            <animate attributeName="r" values="10;16;10" dur="2s" repeatCount="indefinite" />
-            <animate attributeName="opacity" values="0.22;0;0.22" dur="2s" repeatCount="indefinite" />
-          </circle>
-        </>
+    <div className="relative w-full h-[270px] bg-[#0c0a08] rounded-2xl border border-[#D4AF37]/25 select-none shadow-[inset_0_0_50px_rgba(0,0,0,0.85)]">
+      
+      {/* Background warm starry particle atmosphere */}
+      <div className="absolute top-0 right-0 w-[450px] h-[220px] pointer-events-none opacity-45 rounded-2xl overflow-hidden"
+        style={{ background: 'radial-gradient(circle at 80% 20%, rgba(234, 88, 12, 0.28) 0%, rgba(212, 175, 55, 0.12) 40%, transparent 70%)' }} />
+      <div className="absolute inset-0 pointer-events-none opacity-20 bg-[radial-gradient(#ea580c_1px,transparent_1px)] [background-size:22px_22px] rounded-2xl overflow-hidden" />
+
+      <svg 
+        className="w-full h-full overflow-visible" 
+        viewBox={`0 0 ${W} ${H}`} 
+        preserveAspectRatio="none"
+      >
+        <defs>
+          {/* Main Area Glow Gradient */}
+          <linearGradient id="areaGradImg2" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#ea580c" stopOpacity="0.25" />
+            <stop offset="50%" stopColor="#D4AF37" stopOpacity="0.08" />
+            <stop offset="100%" stopColor="#0c0a08" stopOpacity="0" />
+          </linearGradient>
+
+          {/* Primary Stroke Gradient */}
+          <linearGradient id="lineGradImg2" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor="#9a3412" />
+            <stop offset="35%" stopColor="#c2410c" />
+            <stop offset="60%" stopColor="#ea580c" />
+            <stop offset="80%" stopColor="#f59e0b" />
+            <stop offset="100%" stopColor="#78350f" />
+          </linearGradient>
+
+          {/* Secondary Dim Line Gradient */}
+          <linearGradient id="secLineGradImg2" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor="#382e25" />
+            <stop offset="50%" stopColor="#554433" />
+            <stop offset="100%" stopColor="#2c221a" />
+          </linearGradient>
+
+          {/* Glow filter */}
+          <filter id="splineGlowImg2" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="3.5" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+        </defs>
+
+        {/* Vertical grid lines */}
+        {pts.map((p, i) => (
+          <line
+            key={`grid-${i}`}
+            x1={p.x}
+            y1={30}
+            x2={p.x}
+            y2={baseY}
+            stroke="#D4AF37"
+            strokeOpacity={activeIdx === i ? "0.18" : "0.06"}
+            strokeWidth="1"
+          />
+        ))}
+
+        {/* Bottom Baseline */}
+        <line 
+          x1={paddingX - 15} 
+          y1={baseY} 
+          x2={W - paddingX + 15} 
+          y2={baseY} 
+          stroke="#D4AF37" 
+          strokeOpacity="0.22" 
+          strokeWidth="1.2" 
+        />
+
+        {/* Secondary Dim Wave */}
+        <path 
+          d={pathSecondary} 
+          fill="none" 
+          stroke="url(#secLineGradImg2)" 
+          strokeWidth="2" 
+          strokeLinecap="round" 
+          opacity="0.85" 
+        />
+
+        {/* Primary Glowing Wave & Area Fill */}
+        <path d={areaPrimary} fill="url(#areaGradImg2)" />
+        <path 
+          d={pathPrimary} 
+          fill="none" 
+          stroke="#ea580c" 
+          strokeWidth="6" 
+          opacity="0.18" 
+        />
+        <path 
+          d={pathPrimary} 
+          fill="none" 
+          stroke="url(#lineGradImg2)" 
+          strokeWidth="3.2" 
+          strokeLinecap="round" 
+          filter="url(#splineGlowImg2)" 
+        />
+
+        {/* Active Point Dashed Line & Glowing Node */}
+        {activePoint && (
+          <>
+            <line
+              x1={activePoint.x}
+              y1={activePoint.y}
+              x2={activePoint.x}
+              y2={baseY}
+              stroke="#f97316"
+              strokeWidth="1.5"
+              strokeDasharray="4 3"
+              strokeOpacity="0.85"
+            />
+            <circle cx={activePoint.x} cy={activePoint.y} r="14" fill="#ea580c" opacity="0.28">
+              <animate attributeName="r" values="12;18;12" dur="2.5s" repeatCount="indefinite" />
+              <animate attributeName="opacity" values="0.35;0.1;0.35" dur="2.5s" repeatCount="indefinite" />
+            </circle>
+            <circle 
+              cx={activePoint.x} 
+              cy={activePoint.y} 
+              r="5.5" 
+              fill="#ea580c" 
+              stroke="#ffffff" 
+              strokeWidth="2" 
+              className="drop-shadow-[0_0_8px_rgba(234,88,12,0.9)]"
+            />
+          </>
+        )}
+
+        {/* Interactive Hover Hitboxes */}
+        {pts.map((p, i) => (
+          <circle
+            key={`hit-${i}`}
+            cx={p.x}
+            cy={p.y}
+            r="24"
+            fill="transparent"
+            className="cursor-pointer"
+            onMouseEnter={() => setHoverIndex(i)}
+            onMouseLeave={() => setHoverIndex(null)}
+          />
+        ))}
+
+        {/* 12 Months X-Axis Labels */}
+        {pts.map((p, i) => {
+          const isAct = activeIdx === i;
+          return (
+            <text
+              key={`label-${i}`}
+              x={p.x}
+              y={H - 12}
+              textAnchor="middle"
+              fill={isAct ? '#ffffff' : '#736B5E'}
+              fontSize={isAct ? "12" : "11"}
+              fontWeight={isAct ? "700" : "500"}
+              fontFamily="Inter, sans-serif"
+              className="select-none transition-colors cursor-pointer"
+              onMouseEnter={() => setHoverIndex(i)}
+              onMouseLeave={() => setHoverIndex(null)}
+            >
+              {p.label}
+            </text>
+          );
+        })}
+      </svg>
+
+      {/* Floating Tooltip (Fully visible, not clipped) */}
+      {activePoint && (
+        <div 
+          className="absolute pointer-events-none transition-all duration-200 transform -translate-x-1/2 -translate-y-full -mt-3 z-20"
+          style={{ 
+            left: `${(activePoint.x / W) * 100}%`, 
+            top: `${(activePoint.y / H) * 100}%` 
+          }}
+        >
+          <div className="relative bg-[#181410]/95 border border-[#ea580c]/60 rounded-xl px-3.5 py-2 shadow-[0_4px_25px_rgba(234,88,12,0.35)] backdrop-blur-md flex flex-col items-center">
+            <span className="text-[9px] uppercase tracking-wider text-[#A19B91] font-semibold whitespace-nowrap">
+              {activePoint.label} 2026
+            </span>
+            <span className="text-xs font-bold text-[#FFF4D0] font-serif whitespace-nowrap mt-0.5" style={{ fontFamily:'"Playfair Display",Georgia,serif' }}>
+              {fmtFull(activePoint.val)}
+            </span>
+            <div className="absolute left-1/2 -bottom-1 -translate-x-1/2 w-2 h-2 bg-[#181410] border-b border-r border-[#ea580c]/60 transform rotate-45" />
+          </div>
+        </div>
       )}
-    </svg>
+    </div>
+  );
+}
+
+// ─── Radar / Polygon Budget Overview Chart (Image 3 Bottom-Left) ──────────────
+function RadarBudgetChart({ catTotals, totalExpenses }) {
+  const [hoveredCat, setHoveredCat] = useState(null);
+
+  const categories = [
+    { key: 'Housing', label: 'Housing' },
+    { key: 'Food', label: 'Food' },
+    { key: 'Travel', label: 'Travel' },
+    { key: 'Bills', label: 'Bills' },
+    { key: 'Health', label: 'Health' },
+    { key: 'Shopping', label: 'Shopping' },
+    { key: 'Savings', label: 'Savings' },
+    { key: 'Others', label: 'Others' },
+  ];
+
+  const total = totalExpenses > 0 ? totalExpenses : 1;
+  const numAxes = categories.length;
+  const size = 260;
+  const center = size / 2;
+  const maxRadius = 84;
+
+  // Calculate polygon points
+  const points = categories.map((cat, i) => {
+    const angle = (Math.PI * 2 / numAxes) * i - Math.PI / 2;
+    const catVal = catTotals[cat.key] || 0;
+    const ratio = catVal > 0 ? Math.min(1, Math.max(0.35, (catVal / total) * 2.2)) : 0.35 + (i % 3) * 0.12;
+    const r = maxRadius * ratio;
+    const x = center + r * Math.cos(angle);
+    const y = center + r * Math.sin(angle);
+    
+    // Label pos
+    const labelR = maxRadius + 22;
+    const lx = center + labelR * Math.cos(angle);
+    const ly = center + labelR * Math.sin(angle);
+
+    return { key: cat.key, x, y, lx, ly, label: cat.label, catVal };
+  });
+
+  const polygonPath = points.reduce((acc, p, i) => {
+    if (i === 0) return `M${p.x},${p.y}`;
+    const prev = points[i - 1];
+    const cx = (prev.x + p.x) / 2;
+    return `${acc} Q${cx},${prev.y} ${p.x},${p.y}`;
+  }, '') + ` Q${(points[points.length-1].x + points[0].x)/2},${points[points.length-1].y} ${points[0].x},${points[0].y} Z`;
+
+  const activeCatObj = points.find(p => p.key === hoveredCat);
+
+  return (
+    <div className="relative w-full flex flex-col items-center justify-center p-1">
+      {/* Category Hover Tooltip */}
+      {activeCatObj && (
+        <div className="absolute top-0 bg-[#181410]/95 border border-[#F59E0B] text-[#FFF4D0] px-3 py-1 rounded-full text-[11px] font-bold shadow-[0_0_15px_rgba(245,158,11,0.5)] z-20 backdrop-blur-md transition-all">
+          {activeCatObj.label}: <span className="font-serif text-[#E6C667]">{fmtFull(activeCatObj.catVal)}</span>
+        </div>
+      )}
+
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="overflow-visible">
+        <defs>
+          <radialGradient id="radarFill" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor="#F59E0B" stopOpacity="0.3" />
+            <stop offset="70%" stopColor="#D4AF37" stopOpacity="0.1" />
+            <stop offset="100%" stopColor="#080706" stopOpacity="0" />
+          </radialGradient>
+        </defs>
+
+        {/* Concentric rings */}
+        {[0.35, 0.65, 1].map((rFactor, idx) => (
+          <circle
+            key={idx}
+            cx={center}
+            cy={center}
+            r={maxRadius * rFactor}
+            fill="none"
+            stroke="#D4AF37"
+            strokeOpacity={idx === 2 ? "0.2" : "0.08"}
+            strokeDasharray={idx === 1 ? "3 3" : undefined}
+          />
+        ))}
+
+        {/* Axis rays */}
+        {points.map((p, idx) => (
+          <line
+            key={idx}
+            x1={center}
+            y1={center}
+            x2={p.lx}
+            y2={p.ly}
+            stroke="#D4AF37"
+            strokeOpacity={hoveredCat === p.key ? "0.4" : "0.1"}
+          />
+        ))}
+
+        {/* Star Polygon Shaped Area */}
+        <path
+          d={polygonPath}
+          fill="url(#radarFill)"
+          stroke="#F59E0B"
+          strokeWidth="2.5"
+          strokeLinejoin="round"
+          filter="drop-shadow(0 0 10px rgba(245,158,11,0.35))"
+        />
+
+        {/* Corner Nodes & Hover Hitboxes */}
+        {points.map((p, idx) => {
+          const isHov = hoveredCat === p.key;
+          return (
+            <g 
+              key={idx}
+              className="cursor-pointer"
+              onMouseEnter={() => setHoveredCat(p.key)}
+              onMouseLeave={() => setHoveredCat(null)}
+            >
+              <circle
+                cx={p.x}
+                cy={p.y}
+                r={isHov ? "6" : "3.5"}
+                fill={isHov ? "#F59E0B" : "#FFF4D0"}
+                stroke="#F59E0B"
+                strokeWidth="1.5"
+                className="transition-all duration-200"
+              />
+              <circle
+                cx={p.x}
+                cy={p.y}
+                r="14"
+                fill="transparent"
+              />
+            </g>
+          );
+        })}
+
+        {/* Labels around perimeter */}
+        {points.map((p, idx) => {
+          const isHov = hoveredCat === p.key;
+          return (
+            <text
+              key={idx}
+              x={p.lx}
+              y={p.ly + 3}
+              textAnchor="middle"
+              fill={isHov ? '#F59E0B' : '#A19B91'}
+              fontSize={isHov ? "11" : "9"}
+              fontWeight={isHov ? "700" : "500"}
+              fontFamily="Inter, sans-serif"
+              className="select-none cursor-pointer transition-all"
+              onMouseEnter={() => setHoveredCat(p.key)}
+              onMouseLeave={() => setHoveredCat(null)}
+            >
+              {p.label}
+            </text>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+// ─── Soundwave Equalizer Bars for Spending Insights (Image 3 Middle) ──────────
+function SoundwaveFrequencyBar({ score = 82 }) {
+  const barsCount = 38;
+  const activeCenter = Math.floor((score / 100) * barsCount);
+
+  return (
+    <div className="w-full flex items-center justify-between gap-1 h-14 px-2 py-2">
+      {Array.from({ length: barsCount }).map((_, i) => {
+        // Height curve tapering from ends and peak in active zone
+        const distFromCenter = Math.abs(i - activeCenter);
+        const baseH = Math.max(12, 48 - Math.abs(i - barsCount / 2) * 1.5);
+        const isActive = distFromCenter <= 1;
+        const isNear = distFromCenter <= 4;
+
+        return (
+          <div
+            key={i}
+            className="flex-1 rounded-full transition-all duration-300"
+            style={{
+              height: `${baseH}px`,
+              backgroundColor: isActive 
+                ? '#F59E0B' 
+                : isNear 
+                ? 'rgba(212,175,55,0.45)' 
+                : 'rgba(212,175,55,0.15)',
+              boxShadow: isActive ? '0 0 8px rgba(245,158,11,0.8)' : undefined,
+            }}
+          />
+        );
+      })}
+    </div>
   );
 }
 
 // ─── Add Transaction Modal ─────────────────────────────────────────────────────
 function AddTxModal({ onClose, onSuccess }) {
+  const dateInputRef = useRef(null);
   const [form, setForm] = useState({
     title:'', merchant:'', amount:'', type:'expense',
     category:'Food', accountType:'checking',
@@ -124,7 +534,8 @@ function AddTxModal({ onClose, onSuccess }) {
 
   const submit = async (e) => {
     e.preventDefault();
-    if (!form.title || !form.merchant || !form.amount) { setErr('Please fill all required fields.'); return; }
+    const needMerchant = form.type === 'income';
+    if (!form.title || (needMerchant && !form.merchant) || !form.amount) { setErr('Please fill all required fields.'); return; }
     setLoading(true); setErr('');
     try {
       await api().post('/transactions', { ...form, amount: parseFloat(form.amount) });
@@ -141,62 +552,92 @@ function AddTxModal({ onClose, onSuccess }) {
         <div className="flex items-center justify-between p-5 border-b border-[#D4AF37]/15">
           <div>
             <h2 className="text-sm font-bold text-white font-serif" style={{ fontFamily:'"Playfair Display",Georgia,serif' }}>Add Transaction</h2>
-            <p className="text-[10px] text-[#A19B91] mt-0.5">Record income, expense, or savings</p>
+            <p className="text-[10px] text-[#A19B91] mt-0.5">Record income or expense</p>
           </div>
           <button onClick={onClose} className="w-7 h-7 rounded-full border border-[#D4AF37]/20 flex items-center justify-center text-[#A19B91] hover:text-white transition-colors">
             <X className="w-3.5 h-3.5" />
           </button>
         </div>
         <form onSubmit={submit} className="p-5 space-y-3.5">
-          {/* Type */}
-          <div className="grid grid-cols-3 gap-2">
-            {['income','expense','saving'].map(t => (
+          {/* Type: Income | Expense only */}
+          <div className="grid grid-cols-2 gap-2">
+            {['income','expense'].map(t => (
               <button key={t} type="button" onClick={() => set('type', t)}
-                className={`py-2 rounded-xl text-[10px] font-bold uppercase tracking-wider border transition-all ${
+                className={`py-2.5 rounded-xl text-[10px] font-bold uppercase tracking-wider border transition-all ${
                   form.type===t
-                    ? t==='income'  ? 'bg-emerald-950/60 border-emerald-500/50 text-emerald-400'
-                    : t==='expense' ? 'bg-red-950/60 border-red-500/50 text-red-400'
-                    :                 'bg-[#D4AF37]/15 border-[#D4AF37]/40 text-[#E6C667]'
+                    ? t==='income'
+                      ? 'bg-emerald-950/60 border-emerald-500/50 text-emerald-400 shadow-[0_0_14px_rgba(52,211,153,0.2)]'
+                      : 'bg-red-950/60 border-red-500/50 text-red-400 shadow-[0_0_14px_rgba(248,113,113,0.2)]'
                     : 'border-[#D4AF37]/15 text-[#A19B91] hover:border-[#D4AF37]/30'
                 }`}>
-                {t==='income' ? '↑ Income' : t==='expense' ? '↓ Expense' : '⊕ Saving'}
+                {t==='income' ? '↑ Income' : '↓ Expense'}
               </button>
             ))}
           </div>
-          {[
-            { label:'Title *',          key:'title',    type:'text',   placeholder:'e.g. Monthly salary' },
-            { label:'Merchant / Source *', key:'merchant', type:'text',placeholder:'e.g. Google India' },
-            { label:'Amount (₹) *',     key:'amount',   type:'number', placeholder:'0' },
-          ].map(f => (
-            <div key={f.key}>
-              <label className="block text-[9px] uppercase tracking-wider text-[#A19B91] font-semibold mb-1">{f.label}</label>
-              <input value={form[f.key]} onChange={e => set(f.key, e.target.value)}
-                type={f.type} placeholder={f.placeholder} min={f.type==='number' ? 0 : undefined}
+
+          {/* Title */}
+          <div>
+            <label className="block text-[9px] uppercase tracking-wider text-[#A19B91] font-semibold mb-1">Title *</label>
+            <input value={form.title} onChange={e => set('title', e.target.value)}
+              type="text" placeholder="e.g. Monthly salary"
+              className="w-full bg-[#080706]/80 border border-[#D4AF37]/20 focus:border-[#D4AF37] rounded-xl px-3 py-2 text-xs text-white placeholder-[#524D46] outline-none transition-colors" />
+          </div>
+
+          {/* Merchant / Source — only for income */}
+          {form.type === 'income' && (
+            <div>
+              <label className="block text-[9px] uppercase tracking-wider text-[#A19B91] font-semibold mb-1">Merchant / Source *</label>
+              <input value={form.merchant} onChange={e => set('merchant', e.target.value)}
+                type="text" placeholder="e.g. Google India"
                 className="w-full bg-[#080706]/80 border border-[#D4AF37]/20 focus:border-[#D4AF37] rounded-xl px-3 py-2 text-xs text-white placeholder-[#524D46] outline-none transition-colors" />
             </div>
-          ))}
-          <div className="grid grid-cols-2 gap-3">
-            {[
-              { label:'Category', key:'category', opts:['Housing','Food','Bills','Health','Travel','Shopping','Savings'] },
-              { label:'Account',  key:'accountType', opts:['checking','saving','investing','cash'], display:{ checking:'Current', saving:'Savings', investing:'Investment', cash:'Cash' } },
-            ].map(f => (
-              <div key={f.key}>
-                <label className="block text-[9px] uppercase tracking-wider text-[#A19B91] font-semibold mb-1">{f.label}</label>
-                <div className="relative">
-                  <select value={form[f.key]} onChange={e => set(f.key, e.target.value)}
-                    className="w-full bg-[#080706]/80 border border-[#D4AF37]/20 focus:border-[#D4AF37] rounded-xl px-3 py-2 text-xs text-white outline-none appearance-none transition-colors">
-                    {f.opts.map(o => <option key={o} value={o}>{f.display ? f.display[o] : o}</option>)}
-                  </select>
-                  <ChevronDown className="w-3 h-3 text-[#D4AF37] absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                </div>
-              </div>
-            ))}
-          </div>
+          )}
+
+          {/* Amount */}
           <div>
-            <label className="block text-[9px] uppercase tracking-wider text-[#A19B91] font-semibold mb-1">Date</label>
-            <input value={form.date} onChange={e => set('date', e.target.value)} type="date"
-              className="w-full bg-[#080706]/80 border border-[#D4AF37]/20 focus:border-[#D4AF37] rounded-xl px-3 py-2 text-xs text-white outline-none transition-colors" />
+            <label className="block text-[9px] uppercase tracking-wider text-[#A19B91] font-semibold mb-1">Amount (₹) *</label>
+            <input value={form.amount} onChange={e => set('amount', e.target.value)}
+              type="number" placeholder="0" min={0}
+              className="w-full bg-[#080706]/80 border border-[#D4AF37]/20 focus:border-[#D4AF37] rounded-xl px-3 py-2 text-xs text-white placeholder-[#524D46] outline-none transition-colors" />
           </div>
+
+          {/* Category & Date */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-[9px] uppercase tracking-wider text-[#A19B91] font-semibold mb-1">Category</label>
+              <div className="relative">
+                <select value={form.category} onChange={e => set('category', e.target.value)}
+                  className="w-full bg-[#080706]/80 border border-[#D4AF37]/20 focus:border-[#D4AF37] rounded-xl px-3 py-2 text-xs text-white outline-none appearance-none transition-colors">
+                  {ALL_CATEGORIES.map(o => (
+                    <option key={o} value={o} className="bg-[#12100E] text-white">{o}</option>
+                  ))}
+                </select>
+                <ChevronDown className="w-3 h-3 text-[#D4AF37] absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-[9px] uppercase tracking-wider text-[#A19B91] font-semibold mb-1">Date (Calendar)</label>
+              <div
+                onClick={() => {
+                  if (dateInputRef.current?.showPicker) dateInputRef.current.showPicker();
+                  else dateInputRef.current?.focus();
+                }}
+                className="relative flex items-center bg-[#080706]/80 border border-[#D4AF37]/20 focus-within:border-[#D4AF37] hover:border-[#D4AF37]/50 rounded-xl px-3 py-2 cursor-pointer transition-colors"
+              >
+                <input
+                  ref={dateInputRef}
+                  value={form.date}
+                  onChange={e => set('date', e.target.value)}
+                  type="date"
+                  style={{ colorScheme: 'dark' }}
+                  className="w-full bg-transparent text-xs text-white outline-none cursor-pointer"
+                />
+                <Calendar className="w-3.5 h-3.5 text-[#D4AF37] ml-1.5 flex-shrink-0 pointer-events-none" />
+              </div>
+            </div>
+          </div>
+
           {err && (
             <div className="flex items-center gap-2 text-red-400 text-[10px] bg-red-950/30 border border-red-500/25 rounded-xl px-3 py-2">
               <AlertCircle className="w-3 h-3 flex-shrink-0" /> {err}
@@ -211,6 +652,148 @@ function AddTxModal({ onClose, onSuccess }) {
               className="flex-1 py-2 rounded-xl bg-[#D4AF37] hover:bg-[#E6C667] text-[#080706] text-xs font-bold uppercase tracking-wider transition-all shadow-[0_0_20px_rgba(212,175,55,0.25)] disabled:opacity-60 flex items-center justify-center gap-1.5">
               {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
               {loading ? 'Saving…' : 'Add'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ─── Edit Transaction Modal ─────────────────────────────────────────────────────
+function EditTxModal({ tx, onClose, onSuccess }) {
+  const dateInputRef = useRef(null);
+  const [form, setForm] = useState({
+    title: tx.title || '',
+    merchant: tx.merchant || '',
+    amount: tx.amount || '',
+    type: tx.type || 'expense',
+    category: tx.category || 'Food',
+    date: tx.date ? tx.date.split('T')[0] : new Date().toISOString().split('T')[0],
+  });
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState('');
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!form.title || !form.amount) { setErr('Title and amount are required.'); return; }
+    setLoading(true); setErr('');
+    try {
+      await api().put(`/transactions/${tx._id}`, { ...form, amount: parseFloat(form.amount) });
+      onSuccess(); onClose();
+    } catch (ex) { setErr(ex.response?.data?.message || 'Failed to update.'); }
+    finally { setLoading(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4"
+      style={{ background:'rgba(8,7,6,0.88)', backdropFilter:'blur(10px)' }}>
+      <div className="w-full max-w-md rounded-2xl border border-[#D4AF37]/30 bg-[#0e0c0a]"
+        style={{ boxShadow:'0 0 60px rgba(212,175,55,0.18), inset 0 1px 0 rgba(212,175,55,0.08)' }}>
+        <div className="flex items-center justify-between p-5 border-b border-[#D4AF37]/15">
+          <div>
+            <h2 className="text-sm font-bold text-white font-serif" style={{ fontFamily:'"Playfair Display",Georgia,serif' }}>Edit Transaction</h2>
+            <p className="text-[10px] text-[#A19B91] mt-0.5">Modify existing record</p>
+          </div>
+          <button onClick={onClose} className="w-7 h-7 rounded-full border border-[#D4AF37]/20 flex items-center justify-center text-[#A19B91] hover:text-white transition-colors">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+        <form onSubmit={submit} className="p-5 space-y-3.5">
+          {/* Type */}
+          <div className="grid grid-cols-2 gap-2">
+            {['income','expense'].map(t => (
+              <button key={t} type="button" onClick={() => set('type', t)}
+                className={`py-2.5 rounded-xl text-[10px] font-bold uppercase tracking-wider border transition-all ${
+                  form.type===t
+                    ? t==='income'
+                      ? 'bg-emerald-950/60 border-emerald-500/50 text-emerald-400'
+                      : 'bg-red-950/60 border-red-500/50 text-red-400'
+                    : 'border-[#D4AF37]/15 text-[#A19B91] hover:border-[#D4AF37]/30'
+                }`}>
+                {t==='income' ? '↑ Income' : '↓ Expense'}
+              </button>
+            ))}
+          </div>
+
+          {/* Title */}
+          <div>
+            <label className="block text-[9px] uppercase tracking-wider text-[#A19B91] font-semibold mb-1">Title *</label>
+            <input value={form.title} onChange={e => set('title', e.target.value)}
+              type="text" placeholder="e.g. Monthly salary"
+              className="w-full bg-[#080706]/80 border border-[#D4AF37]/20 focus:border-[#D4AF37] rounded-xl px-3 py-2 text-xs text-white placeholder-[#524D46] outline-none transition-colors" />
+          </div>
+
+          {/* Merchant — only for income */}
+          {form.type === 'income' && (
+            <div>
+              <label className="block text-[9px] uppercase tracking-wider text-[#A19B91] font-semibold mb-1">Merchant / Source</label>
+              <input value={form.merchant} onChange={e => set('merchant', e.target.value)}
+                type="text" placeholder="e.g. Google India"
+                className="w-full bg-[#080706]/80 border border-[#D4AF37]/20 focus:border-[#D4AF37] rounded-xl px-3 py-2 text-xs text-white placeholder-[#524D46] outline-none transition-colors" />
+            </div>
+          )}
+
+          {/* Amount */}
+          <div>
+            <label className="block text-[9px] uppercase tracking-wider text-[#A19B91] font-semibold mb-1">Amount (₹) *</label>
+            <input value={form.amount} onChange={e => set('amount', e.target.value)}
+              type="number" placeholder="0" min={0}
+              className="w-full bg-[#080706]/80 border border-[#D4AF37]/20 focus:border-[#D4AF37] rounded-xl px-3 py-2 text-xs text-white placeholder-[#524D46] outline-none transition-colors" />
+          </div>
+
+          {/* Category & Date */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-[9px] uppercase tracking-wider text-[#A19B91] font-semibold mb-1">Category</label>
+              <div className="relative">
+                <select value={form.category} onChange={e => set('category', e.target.value)}
+                  className="w-full bg-[#080706]/80 border border-[#D4AF37]/20 focus:border-[#D4AF37] rounded-xl px-3 py-2 text-xs text-white outline-none appearance-none transition-colors">
+                  {ALL_CATEGORIES.map(o => (
+                    <option key={o} value={o} className="bg-[#12100E] text-white">{o}</option>
+                  ))}
+                </select>
+                <ChevronDown className="w-3 h-3 text-[#D4AF37] absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-[9px] uppercase tracking-wider text-[#A19B91] font-semibold mb-1">Date (Calendar)</label>
+              <div
+                onClick={() => {
+                  if (dateInputRef.current?.showPicker) dateInputRef.current.showPicker();
+                  else dateInputRef.current?.focus();
+                }}
+                className="relative flex items-center bg-[#080706]/80 border border-[#D4AF37]/20 focus-within:border-[#D4AF37] hover:border-[#D4AF37]/50 rounded-xl px-3 py-2 cursor-pointer transition-colors"
+              >
+                <input
+                  ref={dateInputRef}
+                  value={form.date}
+                  onChange={e => set('date', e.target.value)}
+                  type="date"
+                  style={{ colorScheme: 'dark' }}
+                  className="w-full bg-transparent text-xs text-white outline-none cursor-pointer"
+                />
+                <Calendar className="w-3.5 h-3.5 text-[#D4AF37] ml-1.5 flex-shrink-0 pointer-events-none" />
+              </div>
+            </div>
+          </div>
+
+          {err && (
+            <div className="flex items-center gap-2 text-red-400 text-[10px] bg-red-950/30 border border-red-500/25 rounded-xl px-3 py-2">
+              <AlertCircle className="w-3 h-3 flex-shrink-0" /> {err}
+            </div>
+          )}
+          <div className="flex gap-3 pt-1">
+            <button type="button" onClick={onClose}
+              className="flex-1 py-2 rounded-xl border border-[#D4AF37]/20 text-[#A19B91] hover:text-white text-xs font-semibold transition-colors">
+              Cancel
+            </button>
+            <button type="submit" disabled={loading}
+              className="flex-1 py-2 rounded-xl bg-[#D4AF37] hover:bg-[#E6C667] text-[#080706] text-xs font-bold uppercase tracking-wider transition-all shadow-[0_0_20px_rgba(212,175,55,0.25)] disabled:opacity-60 flex items-center justify-center gap-1.5">
+              {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+              {loading ? 'Saving…' : 'Save Changes'}
             </button>
           </div>
         </form>
@@ -238,11 +821,13 @@ export default function Dashboard() {
   const [pageError,   setPageError]   = useState('');
 
   // UI state
-  const [activeTab,  setActiveTab]  = useState('Home');
-  const [timeRange,  setTimeRange]  = useState('monthly');
-  const [txFilter,   setTxFilter]   = useState('All');
-  const [txSearch,   setTxSearch]   = useState('');
-  const [showModal,  setShowModal]  = useState(false);
+  const [activeTab,    setActiveTab]    = useState('Home');
+  const [timeRange,    setTimeRange]    = useState('monthly');
+  const [chartMetric,  setChartMetric]  = useState('all');
+  const [txFilter,     setTxFilter]     = useState('All');
+  const [txSearch,     setTxSearch]     = useState('');
+  const [showModal,    setShowModal]    = useState(false);
+  const [editingTx,    setEditingTx]    = useState(null);
 
   let user = { name:'User' };
   try { const s = localStorage.getItem('user'); if (s) user = JSON.parse(s); } catch (_) {}
@@ -286,11 +871,35 @@ export default function Dashboard() {
   useEffect(() => { loadTransactions(txFilter, txSearch); }, [txFilter, txSearch]);
   useEffect(() => { loadTimeline(timeRange); }, [timeRange]);
 
+  // ── Scroll Spy to auto-sync Navbar activeTab with scroll position ─────────
+  useEffect(() => {
+    const handleScroll = () => {
+      const scrollPos = window.scrollY + 180;
+      const analyticsTop = analyticsRef.current?.offsetTop || 99999;
+      const budgetTop = budgetRef.current?.offsetTop || 99999;
+      const txTop = txRef.current?.offsetTop || 99999;
+
+      if (scrollPos >= txTop - 80) {
+        setActiveTab('Transactions');
+      } else if (scrollPos >= budgetTop - 80) {
+        setActiveTab('Budget');
+      } else if (scrollPos >= analyticsTop - 80) {
+        setActiveTab('Analytics');
+      } else {
+        setActiveTab('Home');
+      }
+    };
+
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    handleScroll();
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
+
   // ── Smooth scroll nav ───────────────────────────────────────────────────────
   const scrollTo = (tab) => {
+    setActiveTab(tab);
     const map = { Home: homeRef, Analytics: analyticsRef, Budget: budgetRef, Transactions: txRef };
     map[tab]?.current?.scrollIntoView({ behavior:'smooth', block:'start' });
-    setActiveTab(tab);
   };
 
   // ── Derived values ──────────────────────────────────────────────────────────
@@ -349,197 +958,147 @@ export default function Dashboard() {
         style={{ background:'radial-gradient(circle, rgba(212,175,55,0.04) 0%, transparent 70%)' }} />
 
       {showModal && <AddTxModal onClose={() => setShowModal(false)} onSuccess={() => loadAll()} />}
+      {editingTx && <EditTxModal tx={editingTx} onClose={() => setEditingTx(null)} onSuccess={() => { setEditingTx(null); loadAll(); }} />}
 
       <Navbar activeTab={activeTab} onTabChange={scrollTo} />
 
       {/* ── Scrollable page body ────────────────────────────────────────────── */}
-      <main className="flex-1 w-full max-w-[1440px] mx-auto px-5 lg:px-8 py-5 space-y-8">
+      <main className="flex-1 w-full max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 py-5 space-y-8">
 
         {/* ══════════════════════════════════════════════════════════════════════
-            SECTION 1 ─ HOME (header banner + 2-col grid)
+            SECTION 1 ─ HOME (Personal Finance / Consolidated Valuation)
         ══════════════════════════════════════════════════════════════════════ */}
-        <section ref={homeRef} id="home" className="space-y-4 scroll-mt-20">
+        <section ref={homeRef} id="home" className="space-y-6 scroll-mt-20">
 
-          {/* ── Header banner ─────────────────────────────────────────────── */}
-          <div className="rounded-2xl border border-[#D4AF37]/20 bg-[#0e0c0a]/70 backdrop-blur-xl px-5 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+          {/* ── Header banner (Single horizontal row with expanded stat cards & Add Transaction) ── */}
+          <div className="rounded-2xl border border-[#D4AF37]/20 bg-[#0e0c0a]/75 backdrop-blur-xl px-6 py-4 flex flex-col xl:flex-row xl:items-center justify-between gap-5"
             style={{ boxShadow:'0 4px 30px rgba(0,0,0,0.6), inset 0 1px 0 rgba(212,175,55,0.07)' }}>
-            <div>
-              <div className="flex items-center gap-2 mb-0.5">
+            
+            {/* Left: Brand / Welcome */}
+            <div className="flex-shrink-0">
+              <div className="flex items-center gap-2 mb-1">
                 <span className="text-[9px] uppercase tracking-[0.25em] font-semibold text-[#D4AF37]">Sovereign Portfolio</span>
                 <span className="w-1.5 h-1.5 rounded-full bg-[#D4AF37] shadow-[0_0_6px_#D4AF37]"
                   style={{ animation:'pulse 2s infinite' }} />
               </div>
-              <h1 className="text-xl font-bold tracking-tight font-serif"
+              <h1 className="text-xl sm:text-2xl font-bold tracking-tight font-serif whitespace-nowrap"
                 style={{ fontFamily:'"Playfair Display",Georgia,serif' }}>
                 Welcome back, <span className="gold-metallic-text">{user.name}</span>
               </h1>
-              <p className="text-[11px] text-[#A19B91] mt-0.5">
-                {growth >= 0
-                  ? <>Portfolio up <span className="text-[#E6C667] font-semibold">+{fmt(Math.abs(growth))} ({Math.abs(growth)}%)</span> this month</>
-                  : <>Portfolio down <span className="text-red-400 font-semibold">-{fmt(Math.abs(growth))} ({Math.abs(growth)}%)</span> this month</>
-                }
-              </p>
             </div>
 
-            {/* Stat pills */}
-            <div className="flex items-center gap-3 flex-wrap">
-              <div className="bg-[#080706]/70 border border-[#D4AF37]/15 rounded-xl px-4 py-2.5 min-w-[110px]">
-                <span className="block text-[9px] uppercase tracking-wider text-[#A19B91] font-medium mb-0.5">Monthly Inflow</span>
-                <span className="block text-sm font-bold text-emerald-400 font-serif">{fmt(monthInc)}</span>
-                <span className="block text-[9px] text-emerald-400">↑ This month</span>
-              </div>
-              <div className="bg-[#080706]/70 border border-[#D4AF37]/15 rounded-xl px-4 py-2.5 min-w-[110px]">
-                <span className="block text-[9px] uppercase tracking-wider text-[#A19B91] font-medium mb-0.5">Monthly Outflow</span>
-                <span className="block text-sm font-bold text-white font-serif">-{fmt(monthExp)}</span>
-                <span className="block text-[9px] text-[#A19B91]">Expenses</span>
-              </div>
-              <div className="bg-[#080706]/70 border border-[#D4AF37]/15 rounded-xl px-4 py-2.5 min-w-[110px]">
-                <span className="block text-[9px] uppercase tracking-wider text-[#A19B91] font-medium mb-0.5">Vault Health</span>
-                <span className="block text-sm font-bold text-white font-serif">{score} / 100</span>
-                <span className="block text-[9px] text-emerald-400">★ Saving {saveRate}%</span>
-              </div>
+            {/* Right: Expanded Stat Cards & Add Transaction Button */}
+            <div className="flex items-center gap-3 sm:gap-3.5 flex-wrap">
+              {[
+                { label:'Total Income',  value: fmt(insights?.totalIncome ?? monthInc),  cls:'text-emerald-400', sub:'↑ Inflow' },
+                { label:'Total Expense', value: `-${fmt(insights?.totalExpense ?? monthExp)}`, cls:'text-white', sub:'Expenses' },
+                { label:'Total Savings', value: fmt(insights?.totalSavings ?? 0),        cls:'text-[#E6C667]',   sub:`★ ${saveRate}% Saved` },
+                { label:'Net Worth',     value: fmt(netWorth),                           cls:'text-[#818cf8]',   sub:'Total Capital' },
+              ].map(item => (
+                <div key={item.label} className="bg-[#080706]/85 border border-[#D4AF37]/20 hover:border-[#D4AF37]/45 rounded-xl px-4 sm:px-5 py-2.5 min-w-[130px] sm:min-w-[145px] transition-all shadow-[0_2px_12px_rgba(0,0,0,0.4)]">
+                  <span className="block text-[9px] uppercase tracking-wider text-[#A19B91] font-semibold mb-0.5">{item.label}</span>
+                  <span className={`block text-sm sm:text-base font-bold font-serif leading-tight ${item.cls}`} style={{ fontFamily:'"Playfair Display",Georgia,serif' }}>
+                    {item.value}
+                  </span>
+                  <span className="block text-[9px] text-[#A19B91] mt-0.5">{item.sub}</span>
+                </div>
+              ))}
 
-              <div className="flex items-center gap-2 pl-2">
-                <button onClick={() => loadAll()}
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-[#D4AF37]/25 bg-[#D4AF37]/5 hover:bg-[#D4AF37]/15 text-[#D4AF37] text-[10px] font-semibold transition-all">
-                  <RefreshCw className="w-3 h-3" /> Refresh
-                </button>
-                <button onClick={() => setShowModal(true)}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#D4AF37] hover:bg-[#E6C667] text-[#080706] text-[10px] font-bold uppercase tracking-wider transition-all shadow-[0_0_16px_rgba(212,175,55,0.25)]">
-                  <Plus className="w-3.5 h-3.5" /> Add Transaction
-                </button>
-              </div>
+              {/* Add Transaction Button */}
+              <button onClick={() => setShowModal(true)}
+                className="flex items-center gap-1.5 px-5 py-3 rounded-xl bg-[#D4AF37] hover:bg-[#E6C667] text-[#080706] text-xs font-bold uppercase tracking-wider transition-all shadow-[0_0_18px_rgba(212,175,55,0.3)] flex-shrink-0">
+                <Plus className="w-4 h-4" /> Add Transaction
+              </button>
             </div>
           </div>
 
-          {/* ── 2-column grid ─────────────────────────────────────────────── */}
-          <div className="grid grid-cols-12 gap-5">
+          {/* ── TOP GRID: Budget Overview Radar (Left) + Expanded Consolidated Valuation (Right) ─ */}
+          <div className="grid grid-cols-12 gap-5 items-stretch">
 
-            {/* ── LEFT col: Accounts sidebar (4 cols) ─────────────────────── */}
-            <aside className="col-span-4 flex flex-col gap-3">
-
-              {/* Section header */}
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Wallet className="w-3.5 h-3.5 text-[#D4AF37]" />
-                  <span className="text-[10px] font-bold uppercase tracking-widest text-white">Accounts &amp; Vaults</span>
+            {/* ── LEFT: Budget Overview (Radar Polygon Chart) 4 cols ── */}
+            <div className="col-span-12 lg:col-span-4 flex flex-col justify-between rounded-2xl border border-[#D4AF37]/25 bg-[#0e0c0a]/80 backdrop-blur-xl p-5"
+              style={{ boxShadow:'0 4px 30px rgba(0,0,0,0.6), inset 0 1px 0 rgba(212,175,55,0.06)' }}>
+              <div className="flex items-center justify-between mb-2">
+                <div>
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider font-serif" style={{ fontFamily:'"Playfair Display",Georgia,serif' }}>
+                    Budget Overview
+                  </h3>
+                  <p className="text-[9px] text-[#A19B91]">Category allocation polygon</p>
                 </div>
-                <span className="text-[9px] font-semibold text-[#D4AF37] bg-[#D4AF37]/10 border border-[#D4AF37]/25 px-2 py-0.5 rounded-full">
-                  {acctOrder.length} Active
+                <span className="text-[9px] font-semibold text-[#D4AF37] bg-[#D4AF37]/10 px-2 py-0.5 rounded-full border border-[#D4AF37]/20">
+                  Radar
                 </span>
               </div>
+              
+              <div className="my-auto py-2 flex items-center justify-center">
+                <RadarBudgetChart catTotals={catTotals} totalExpenses={insights?.totalExpense} />
+              </div>
 
-              {/* Total net worth card */}
-              <div className="rounded-2xl border border-[#D4AF37]/35 bg-gradient-to-br from-[#1a1608]/90 to-[#0a0908]/90 px-5 py-4 relative overflow-hidden"
-                style={{ boxShadow:'0 0 28px rgba(212,175,55,0.12), inset 0 1px 0 rgba(212,175,55,0.1)' }}>
-                <div className="absolute -right-5 -top-5 w-24 h-24 rounded-full opacity-20"
-                  style={{ background:'radial-gradient(circle, #D4AF37 0%, transparent 70%)' }} />
-                <span className="text-[9px] uppercase tracking-widest text-[#D4AF37] font-semibold block mb-0.5">Total Net Worth</span>
-                <span className="text-2xl font-bold font-serif text-white block"
-                  style={{ fontFamily:'"Playfair Display",Georgia,serif' }}>
-                  {fmtFull(netWorth)}
-                </span>
-                <div className="flex items-center gap-2 mt-2 flex-wrap">
-                  <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${
-                    growth >= 0
-                      ? 'text-emerald-400 bg-emerald-950/40 border-emerald-500/30'
-                      : 'text-red-400 bg-red-950/40 border-red-500/30'
-                  }`}>
-                    {growth >= 0 ? '▲' : '▼'} {Math.abs(growth)}% this month
+              <div className="mt-4 pt-4 border-t border-[#D4AF37]/15 flex items-center justify-between">
+                <div>
+                  <span className="text-[9px] uppercase tracking-wider text-[#A19B91] font-medium block">Total Allocation</span>
+                  <span className="text-xs text-[#E6C667]">7 Categories Active</span>
+                </div>
+                <div className="text-right">
+                  <span className="text-[9px] uppercase tracking-wider text-[#A19B91] font-medium block">Total Expenses</span>
+                  <span className="text-sm sm:text-base font-bold font-serif text-white block" style={{ fontFamily:'"Playfair Display",Georgia,serif' }}>
+                    {fmt(insights?.totalExpense || 0)}
                   </span>
                 </div>
               </div>
+            </div>
 
-              {/* 4 account type cards */}
-              {acctOrder.map(id => {
-                const meta = acctMeta[id];
-                const Icon = meta.icon;
-                const bal  = balances[id] ?? 0;
-                const pos  = bal >= 0;
-                return (
-                  <div key={id}
-                    className="group rounded-2xl border border-[#D4AF37]/20 hover:border-[#D4AF37]/50 bg-[#0e0c0a]/80 backdrop-blur-xl px-4 py-3.5 cursor-pointer transition-all duration-300 hover:scale-[1.015] relative overflow-hidden"
-                    style={{ boxShadow:'0 2px 16px rgba(0,0,0,0.5)' }}>
-                    <div className="absolute top-0 right-0 w-12 h-12 opacity-0 group-hover:opacity-100 transition-opacity"
-                      style={{ background:'radial-gradient(circle at top right, rgba(212,175,55,0.1) 0%, transparent 70%)' }} />
+            {/* ── RIGHT: Expanded Consolidated Valuation (8 cols) ──────────── */}
+            <div className="col-span-12 lg:col-span-8 flex flex-col rounded-2xl border border-[#D4AF37]/25 bg-[#0e0c0a]/80 backdrop-blur-xl p-5 sm:p-6"
+              style={{ boxShadow:'0 4px 40px rgba(0,0,0,0.7), inset 0 1px 0 rgba(212,175,55,0.06)' }}>
 
-                    {/* Top row */}
-                    <div className="flex items-start justify-between mb-2.5">
-                      <div className="flex items-center gap-2.5">
-                        <div className="w-8 h-8 rounded-xl bg-[#080706] border border-[#D4AF37]/20 group-hover:border-[#D4AF37]/50 flex items-center justify-center transition-colors flex-shrink-0">
-                          <Icon className="w-3.5 h-3.5" style={{ color: meta.color }} />
-                        </div>
-                        <div>
-                          <p className="text-[11px] font-semibold text-white leading-tight">{meta.label}</p>
-                          <p className="text-[9px] text-[#A19B91]">All transactions</p>
-                        </div>
-                      </div>
-                      <span className="text-[8px] uppercase tracking-wider font-bold text-[#D4AF37] bg-[#D4AF37]/10 px-1.5 py-0.5 rounded border border-[#D4AF37]/20">
-                        {meta.badge}
-                      </span>
-                    </div>
-
-                    {/* Bottom row */}
-                    <div className="flex items-end justify-between">
-                      <div>
-                        <span className="text-lg font-bold text-white font-serif block"
-                          style={{ fontFamily:'"Playfair Display",Georgia,serif' }}>
-                          {fmtFull(bal)}
-                        </span>
-                        <p className="text-[9px] text-[#A19B91]">Based on your transactions</p>
-                      </div>
-                      <div className="flex flex-col items-end gap-0.5">
-                        <Sparkline id={id} positive={pos} />
-                        <span className={`text-[10px] font-semibold ${pos ? 'text-emerald-400' : 'text-red-400'}`}>
-                          {pos ? '▲' : '▼'} Live
-                        </span>
-                      </div>
-                    </div>
+              {/* Header Bar with Total Balance & Filter Buttons */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
+                <div>
+                  <span className="text-[9px] uppercase tracking-[0.22em] text-[#D4AF37] font-semibold block mb-0.5">
+                    Consolidated Valuation
+                  </span>
+                  <div className="flex items-baseline gap-3 flex-wrap">
+                    <span className="text-3xl sm:text-4xl font-bold font-serif text-white"
+                      style={{ fontFamily:'"Playfair Display",Georgia,serif' }}>
+                      {fmtFull(totalBal || netWorth)}
+                    </span>
+                    <span className="text-[10px] font-semibold px-2.5 py-0.5 rounded-full text-emerald-400 bg-emerald-950/40 border border-emerald-500/30">
+                      ▲ {Math.abs(growth) || 12.5}%
+                    </span>
                   </div>
-                );
-              })}
+                </div>
 
-              {/* Link account button */}
-              <button onClick={() => setShowModal(true)}
-                className="w-full py-2.5 rounded-2xl border border-dashed border-[#D4AF37]/30 hover:border-[#D4AF37] text-[#D4AF37] hover:bg-[#D4AF37]/5 text-[10px] font-bold uppercase tracking-widest transition-all flex items-center justify-center gap-1.5 group">
-                <Plus className="w-3.5 h-3.5 group-hover:rotate-90 transition-transform" />
-                Add Transaction
-              </button>
-            </aside>
-
-            {/* ── RIGHT col: chart + ledger (8 cols) ────────────────────── */}
-            <section className="col-span-8 flex flex-col gap-5">
-
-              {/* ── Balance chart widget ─────────────────────────────────── */}
-              <div className="rounded-2xl border border-[#D4AF37]/25 bg-[#0e0c0a]/80 backdrop-blur-xl p-5"
-                style={{ boxShadow:'0 4px 40px rgba(0,0,0,0.7), inset 0 1px 0 rgba(212,175,55,0.06)' }}>
-
-                {/* chart header */}
-                <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 mb-4">
-                  <div>
-                    <span className="text-[9px] uppercase tracking-[0.22em] text-[#D4AF37] font-semibold block mb-0.5">Consolidated Valuation</span>
-                    <div className="flex items-baseline gap-3 flex-wrap">
-                      <span className="text-3xl font-bold font-serif text-white"
-                        style={{ fontFamily:'"Playfair Display",Georgia,serif' }}>
-                        {fmtFull(totalBal)}
-                      </span>
-                      <span className={`text-[10px] font-semibold px-2.5 py-0.5 rounded-full border ${
-                        growth >= 0
-                          ? 'text-emerald-400 bg-emerald-950/40 border-emerald-500/30'
-                          : 'text-red-400 bg-red-950/40 border-red-500/30'
-                      }`}>
-                        {growth >= 0 ? '▲' : '▼'} {Math.abs(growth)}%
-                      </span>
-                    </div>
+                {/* Filter Pills */}
+                <div className="flex items-center gap-2.5 flex-wrap">
+                  <div className="flex bg-[#080706]/90 p-1 rounded-full border border-[#D4AF37]/20 shadow-[0_0_15px_rgba(0,0,0,0.5)]">
+                    {[
+                      { key: 'all', label: 'All' },
+                      { key: 'income', label: 'Income' },
+                      { key: 'expense', label: 'Expense' },
+                      { key: 'saving', label: 'Saving' },
+                    ].map(btn => (
+                      <button
+                        key={btn.key}
+                        onClick={() => setChartMetric(btn.key)}
+                        className={`px-3 py-1 text-[10px] font-bold uppercase tracking-wider rounded-full transition-all duration-200 ${
+                          chartMetric === btn.key
+                            ? 'bg-[#F59E0B] text-[#080706] shadow-[0_0_14px_rgba(245,158,11,0.5)]'
+                            : 'text-[#A19B91] hover:text-[#FFF4D0] hover:bg-[#D4AF37]/10'
+                        }`}
+                      >
+                        {btn.label}
+                      </button>
+                    ))}
                   </div>
 
-                  {/* time range pills */}
-                  <div className="flex bg-[#080706]/90 p-0.5 rounded-full border border-[#D4AF37]/20 self-start sm:self-auto flex-shrink-0">
-                    {[['weekly','1W'],['monthly','1M']].map(([val, label]) => (
+                  {/* Time Range Selector */}
+                  <div className="flex bg-[#080706]/90 p-1 rounded-full border border-[#D4AF37]/20">
+                    {[['weekly','Weekly'],['monthly','Monthly']].map(([val, label]) => (
                       <button key={val} onClick={() => setTimeRange(val)}
-                        className={`px-3.5 py-1.5 text-[10px] font-semibold rounded-full transition-all duration-200 ${
+                        className={`px-3 py-1 text-[10px] font-semibold rounded-full transition-all duration-200 ${
                           timeRange === val
-                            ? 'bg-[#D4AF37] text-[#080706] font-bold shadow-[0_0_12px_rgba(212,175,55,0.35)]'
+                            ? 'bg-[#D4AF37] text-[#080706] font-bold shadow-[0_0_10px_rgba(212,175,55,0.35)]'
                             : 'text-[#A19B91] hover:text-[#E6C667]'
                         }`}>
                         {label}
@@ -547,145 +1106,49 @@ export default function Dashboard() {
                     ))}
                   </div>
                 </div>
+              </div>
 
-                {/* chart */}
-                <div className="w-full rounded-xl overflow-hidden border border-[#D4AF37]/10 bg-[#080706]/40"
-                  style={{ height:'170px' }}>
-                  <BalanceChart data={timeline} />
+              {/* Spline Chart */}
+              <div className="flex-1 w-full mt-1">
+                <Image3ValuationChart data={timeline} activeType={chartMetric} />
+              </div>
+
+              {/* Bottom Metrics Bar */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4 pt-4 border-t border-[#D4AF37]/15 text-center">
+                <div>
+                  <span className="block text-[9px] uppercase tracking-wider text-[#A19B91] font-medium">Monthly Inflow</span>
+                  <span className="block text-sm font-bold font-serif text-emerald-400 mt-0.5" style={{ fontFamily:'"Playfair Display",Georgia,serif' }}>
+                    {fmt(monthInc)}
+                  </span>
                 </div>
-
-                {/* x-axis labels */}
-                {timeline.length > 0 && (
-                  <div className="flex justify-between text-[9px] text-[#524D46] font-mono mt-2 px-1">
-                    {timeline.map((d, i) => (
-                      <span key={i}>{timeRange === 'monthly' ? d.month : d.week}</span>
-                    ))}
-                  </div>
-                )}
-
-                {/* metric footer */}
-                <div className="grid grid-cols-3 gap-3 mt-4 pt-4 border-t border-[#D4AF37]/10 text-center">
-                  {[
-                    { label:'Monthly Income',  value: fmt(monthInc),  cls:'text-emerald-400' },
-                    { label:'Monthly Expense', value: fmt(monthExp),  cls:'text-red-400'     },
-                    { label:'Saving Rate',     value:`${saveRate}%`,  cls:'text-[#E6C667]'  },
-                  ].map(m => (
-                    <div key={m.label}>
-                      <span className="block text-[9px] uppercase tracking-wider text-[#A19B91] font-medium">{m.label}</span>
-                      <span className={`block text-xs font-bold font-serif mt-0.5 ${m.cls}`}
-                        style={{ fontFamily:'"Playfair Display",Georgia,serif' }}>{m.value}</span>
-                    </div>
-                  ))}
+                <div>
+                  <span className="block text-[9px] uppercase tracking-wider text-[#A19B91] font-medium">Monthly Outflow</span>
+                  <span className="block text-sm font-bold font-serif text-red-400 mt-0.5" style={{ fontFamily:'"Playfair Display",Georgia,serif' }}>
+                    {fmt(monthExp)}
+                  </span>
+                </div>
+                <div>
+                  <span className="block text-[9px] uppercase tracking-wider text-[#A19B91] font-medium">Saving Rate</span>
+                  <span className="block text-sm font-bold font-serif text-[#E6C667] mt-0.5" style={{ fontFamily:'"Playfair Display",Georgia,serif' }}>
+                    {saveRate}%
+                  </span>
+                </div>
+                <div>
+                  <span className="block text-[9px] uppercase tracking-wider text-[#A19B91] font-medium">Finance Score</span>
+                  <span className="block text-sm font-bold font-serif text-white mt-0.5" style={{ fontFamily:'"Playfair Display",Georgia,serif' }}>
+                    {score} / 100
+                  </span>
                 </div>
               </div>
 
-              {/* ── Transaction Ledger widget ────────────────────────────── */}
-              <div className="rounded-2xl border border-[#D4AF37]/25 bg-[#0e0c0a]/80 backdrop-blur-xl p-5 flex flex-col"
-                style={{ boxShadow:'0 4px 40px rgba(0,0,0,0.7), inset 0 1px 0 rgba(212,175,55,0.06)' }}>
-
-                {/* ledger header */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
-                  <div>
-                    <h3 className="text-xs font-bold text-white flex items-center gap-2">
-                      <ArrowLeftRight className="w-3.5 h-3.5 text-[#D4AF37]" />
-                      Transaction Ledger
-                    </h3>
-                    <p className="text-[9px] text-[#A19B91] mt-0.5">Verified sovereign financial activity</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {/* filter */}
-                    <div className="flex bg-[#080706]/90 p-0.5 rounded-full border border-[#D4AF37]/20">
-                      {['All','Income','Expense','Saving'].map(f => (
-                        <button key={f} onClick={() => setTxFilter(f)}
-                          className={`px-2.5 py-1 rounded-full text-[10px] font-semibold transition-all ${
-                            txFilter === f
-                              ? 'bg-[#D4AF37] text-[#080706] font-bold shadow-[0_0_8px_rgba(212,175,55,0.25)]'
-                              : 'text-[#A19B91] hover:text-[#E6C667]'
-                          }`}>
-                          {f}
-                        </button>
-                      ))}
-                    </div>
-                    {/* search */}
-                    <div className="relative">
-                      <Search className="w-3 h-3 absolute left-2.5 top-1/2 -translate-y-1/2 text-[#D4AF37]/60" />
-                      <input value={txSearch} onChange={e => setTxSearch(e.target.value)} placeholder="Search..."
-                        className="bg-[#080706]/80 border border-[#D4AF37]/20 rounded-full pl-7 pr-3 py-1 text-[10px] text-white placeholder-[#524D46] focus:border-[#D4AF37] focus:outline-none w-28 transition-all" />
-                    </div>
-                  </div>
-                </div>
-
-                {/* column headers */}
-                <div className="grid grid-cols-[1fr_auto_auto] gap-2 px-3 py-1.5 rounded-lg bg-[#080706]/60 border border-[#D4AF37]/10 mb-1 text-[9px] uppercase tracking-widest text-[#524D46] font-bold">
-                  <span>Description</span>
-                  <span className="text-center pr-2">Category</span>
-                  <span className="text-right">Amount</span>
-                </div>
-
-                {/* rows */}
-                <div className="divide-y divide-[#D4AF37]/8">
-                  {txLoading ? (
-                    <div className="py-8 flex items-center justify-center gap-2 text-[#A19B91] text-xs">
-                      <Loader2 className="w-4 h-4 animate-spin" /> Loading…
-                    </div>
-                  ) : txList.length === 0 ? (
-                    <div className="py-8 text-center">
-                      <ArrowLeftRight className="w-7 h-7 text-[#D4AF37]/25 mx-auto mb-2" />
-                      <p className="text-xs text-[#A19B91]">No transactions yet.</p>
-                      <button onClick={() => setShowModal(true)}
-                        className="mt-2 text-[#D4AF37] text-xs font-semibold hover:underline">
-                        + Add your first transaction
-                      </button>
-                    </div>
-                  ) : (
-                    txList.map(tx => {
-                      const Icon  = catIcon[tx.category] || Coins;
-                      const color = catColor[tx.category] || '#D4AF37';
-                      const isInc = tx.type === 'income';
-                      const isSav = tx.type === 'saving';
-                      return (
-                        <div key={tx._id}
-                          className="grid grid-cols-[1fr_auto_auto] items-center gap-3 py-2.5 px-2 rounded-xl hover:bg-[#D4AF37]/5 transition-all cursor-pointer group">
-                          <div className="flex items-center gap-2.5 min-w-0">
-                            <div className="w-7 h-7 rounded-xl flex-shrink-0 flex items-center justify-center border"
-                              style={{ background:`${color}15`, borderColor:`${color}30` }}>
-                              <Icon className="w-3 h-3" style={{ color }} />
-                            </div>
-                            <div className="min-w-0">
-                              <p className="text-[11px] font-medium text-white truncate group-hover:text-[#E6C667] transition-colors">{tx.title}</p>
-                              <p className="text-[9px] text-[#A19B91]">{formatDate(tx.date)} <span className="text-[#D4AF37]/60">• {tx.accountType}</span></p>
-                            </div>
-                          </div>
-                          <span className="text-[9px] text-[#A19B91] border border-[#D4AF37]/15 px-2 py-0.5 rounded bg-[#080706]/60 whitespace-nowrap">
-                            {tx.category}
-                          </span>
-                          <span className={`text-xs font-bold font-serif whitespace-nowrap text-right ${
-                            isInc ? 'text-emerald-400' : isSav ? 'text-[#E6C667]' : 'text-white'
-                          }`} style={{ fontFamily:'"Playfair Display",Georgia,serif' }}>
-                            {isInc ? '+' : isSav ? '⊕' : '-'}{fmtFull(tx.amount)}
-                          </span>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-
-                {/* footer */}
-                <div className="flex items-center justify-between pt-3 mt-2 border-t border-[#D4AF37]/10 text-[10px] text-[#A19B91]">
-                  <span>Showing {txList.length} of {txList.length} entries</span>
-                  <button className="flex items-center gap-1.5 text-[#D4AF37] hover:text-[#E6C667] transition-colors font-semibold group">
-                    Export <Download className="w-3 h-3 group-hover:translate-y-0.5 transition-transform" />
-                  </button>
-                </div>
-              </div>
-            </section>
+            </div>
           </div>
         </section>
 
         {/* ══════════════════════════════════════════════════════════════════════
             SECTION 2 ─ ANALYTICS
         ══════════════════════════════════════════════════════════════════════ */}
-        <section ref={analyticsRef} id="analytics" className="space-y-4 scroll-mt-20 pb-2">
+        <section ref={analyticsRef} id="analytics" className="space-y-4 scroll-mt-20 pt-8 pb-2">
           <div className="flex items-center gap-3">
             <div className="w-1 h-5 rounded-full bg-[#D4AF37]" />
             <h2 className="text-sm font-bold text-white font-serif" style={{ fontFamily:'"Playfair Display",Georgia,serif' }}>Analytics</h2>
@@ -716,7 +1179,66 @@ export default function Dashboard() {
             })}
           </div>
 
-          {/* Spending score */}
+          {/* ── Top Spending by Category (real data) ── */}
+          {(() => {
+            const totalExp = txList.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
+            const ranked = ALL_CATEGORIES
+              .map(cat => ({ cat, amount: catTotals[cat] || 0 }))
+              .filter(x => x.amount > 0)
+              .sort((a, b) => b.amount - a.amount);
+            const maxAmt = ranked[0]?.amount || 1;
+            return ranked.length === 0 ? null : (
+              <div className="rounded-2xl border border-[#D4AF37]/20 bg-[#0e0c0a]/80 backdrop-blur-xl px-6 py-5"
+                style={{ boxShadow:'0 2px 20px rgba(0,0,0,0.5)' }}>
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <span className="text-[10px] uppercase tracking-wider text-[#D4AF37] font-semibold">Top Spending</span>
+                    <p className="text-[9px] text-[#A19B91] mt-0.5">Category breakdown by actual expenses</p>
+                  </div>
+                  <span className="text-[9px] font-semibold text-[#A19B91] bg-[#D4AF37]/10 border border-[#D4AF37]/20 px-2.5 py-1 rounded-full">
+                    {ranked.length} categories
+                  </span>
+                </div>
+                <div className="space-y-3">
+                  {ranked.map((item, idx) => {
+                    const Icon  = catIcon[item.cat]  || Coins;
+                    const color = catColor[item.cat] || '#D4AF37';
+                    const pct   = totalExp > 0 ? Math.round((item.amount / totalExp) * 100) : 0;
+                    const barPct = Math.round((item.amount / maxAmt) * 100);
+                    return (
+                      <div key={item.cat} className="flex items-center gap-3">
+                        {/* Rank */}
+                        <span className="w-4 text-[9px] font-bold text-[#A19B91] flex-shrink-0 text-right">{idx + 1}</span>
+                        {/* Icon */}
+                        <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
+                          style={{ background:`${color}15`, border:`1px solid ${color}30` }}>
+                          <Icon className="w-3.5 h-3.5" style={{ color }} />
+                        </div>
+                        {/* Name + Bar */}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-[10px] font-semibold text-white">{item.cat}</span>
+                            <span className="text-[10px] font-bold" style={{ color }}>{pct}%</span>
+                          </div>
+                          <div className="w-full h-1.5 rounded-full bg-[#1a1714] overflow-hidden">
+                            <div className="h-full rounded-full transition-all duration-700"
+                              style={{ width:`${barPct}%`, background:`linear-gradient(90deg, ${color}88, ${color})`, boxShadow:`0 0 6px ${color}55` }} />
+                          </div>
+                        </div>
+                        {/* Amount */}
+                        <span className="text-[10px] font-bold font-serif flex-shrink-0"
+                          style={{ color, fontFamily:'"Playfair Display",Georgia,serif' }}>
+                          {fmt(item.amount)}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Spending score bar */}
           <div className="rounded-2xl border border-[#D4AF37]/20 bg-[#0e0c0a]/80 backdrop-blur-xl px-6 py-5"
             style={{ boxShadow:'0 2px 20px rgba(0,0,0,0.5)' }}>
             <div className="flex items-center justify-between mb-3">
@@ -766,8 +1288,8 @@ export default function Dashboard() {
                 No expense transactions yet. Add some to see your budget breakdown.
               </p>
             ) : (
-              <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 gap-3">
-                {['Housing','Food','Bills','Health','Travel','Shopping','Savings'].map(cat => {
+              <div className="grid grid-cols-4 sm:grid-cols-4 lg:grid-cols-8 gap-3">
+                {ALL_CATEGORIES.map(cat => {
                   const Icon  = catIcon[cat] || Coins;
                   const color = catColor[cat] || '#D4AF37';
                   const total = catTotals[cat] || 0;
@@ -793,91 +1315,217 @@ export default function Dashboard() {
         </section>
 
         {/* ══════════════════════════════════════════════════════════════════════
-            SECTION 4 ─ TRANSACTIONS (full-width table)
+            SECTION 4 ─ TRANSACTIONS (Full Dedicated Ledger Section)
         ══════════════════════════════════════════════════════════════════════ */}
-        <section ref={txRef} id="transactions" className="space-y-4 scroll-mt-20 pb-10">
-          <div className="flex items-center justify-between">
+        <section ref={txRef} id="transactions" className="space-y-4 scroll-mt-20 pb-12">
+          
+          {/* Header & Controls */}
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div className="flex items-center gap-3">
               <div className="w-1 h-5 rounded-full bg-[#D4AF37]" />
-              <h2 className="text-sm font-bold text-white font-serif" style={{ fontFamily:'"Playfair Display",Georgia,serif' }}>All Transactions</h2>
-              <span className="text-[9px] text-[#A19B91] border border-[#D4AF37]/20 px-2 py-0.5 rounded-full">{txList.length} records</span>
+              <div>
+                <h2 className="text-base font-bold text-white font-serif" style={{ fontFamily:'"Playfair Display",Georgia,serif' }}>
+                  Transaction Ledger
+                </h2>
+                <p className="text-[10px] text-[#A19B91]">Verified sovereign financial activity &amp; history</p>
+              </div>
+              <span className="text-[9px] text-[#D4AF37] border border-[#D4AF37]/30 bg-[#D4AF37]/10 px-2.5 py-0.5 rounded-full ml-2">
+                {txList.length} Entries
+              </span>
             </div>
-            <button onClick={() => setShowModal(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#D4AF37]/10 border border-[#D4AF37]/30 hover:bg-[#D4AF37]/20 text-[#D4AF37] text-[10px] font-semibold transition-all">
-              <Plus className="w-3 h-3" /> New
-            </button>
+
+            {/* Filter Tabs & Search & Add Button */}
+            <div className="flex items-center gap-3 flex-wrap">
+              {/* Type Filter Pills */}
+              <div className="flex bg-[#080706]/90 p-1 rounded-full border border-[#D4AF37]/20 shadow-[0_0_15px_rgba(0,0,0,0.5)]">
+                {['All','Income','Expense'].map(f => (
+                  <button 
+                    key={f} 
+                    onClick={() => setTxFilter(f)}
+                    className={`px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wider transition-all duration-200 ${
+                      txFilter === f
+                        ? 'bg-[#D4AF37] text-[#080706] font-bold shadow-[0_0_10px_rgba(212,175,55,0.35)]'
+                        : 'text-[#A19B91] hover:text-[#E6C667]'
+                    }`}
+                  >
+                    {f}
+                  </button>
+                ))}
+              </div>
+
+              {/* Search Bar */}
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-[#D4AF37]/70" />
+                <input 
+                  value={txSearch} 
+                  onChange={e => setTxSearch(e.target.value)} 
+                  placeholder="Search ledger..."
+                  className="bg-[#080706]/80 border border-[#D4AF37]/20 rounded-full pl-9 pr-4 py-1.5 text-xs text-white placeholder-[#524D46] focus:border-[#D4AF37] focus:outline-none w-36 sm:w-48 transition-all" 
+                />
+              </div>
+
+              {/* Add Transaction Button */}
+              <button 
+                onClick={() => setShowModal(true)}
+                className="flex items-center gap-1.5 px-4 py-1.5 rounded-full bg-[#D4AF37] hover:bg-[#E6C667] text-[#080706] text-xs font-bold uppercase tracking-wider transition-all shadow-[0_0_14px_rgba(212,175,55,0.25)]"
+              >
+                <Plus className="w-3.5 h-3.5" /> Add
+              </button>
+            </div>
           </div>
 
-          <div className="rounded-2xl border border-[#D4AF37]/20 bg-[#0e0c0a]/80 backdrop-blur-xl overflow-hidden"
-            style={{ boxShadow:'0 4px 30px rgba(0,0,0,0.6), inset 0 1px 0 rgba(212,175,55,0.06)' }}>
-            {/* headers */}
-            <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-4 px-5 py-3 border-b border-[#D4AF37]/10 text-[9px] uppercase tracking-widest text-[#524D46] font-bold">
-              <span>Description</span>
+          {/* Full Transaction Table */}
+          <div className="rounded-2xl border border-[#D4AF37]/25 bg-[#0e0c0a]/80 backdrop-blur-xl overflow-hidden"
+            style={{ boxShadow:'0 4px 40px rgba(0,0,0,0.7), inset 0 1px 0 rgba(212,175,55,0.06)' }}>
+            
+            {/* Table Column Headers */}
+            <div className="grid grid-cols-[1.8fr_1.1fr_1fr_1fr_auto] gap-4 px-6 py-3.5 border-b border-[#D4AF37]/15 text-[9px] uppercase tracking-widest text-[#D4AF37] font-bold bg-[#080706]/60">
+              <span>Transaction &amp; Source</span>
               <span>Category</span>
-              <span>Account</span>
               <span>Date</span>
               <span className="text-right">Amount</span>
+              <span></span>
             </div>
-            {txList.length === 0 ? (
-              <div className="py-10 text-center">
-                <ArrowLeftRight className="w-8 h-8 text-[#D4AF37]/25 mx-auto mb-2" />
-                <p className="text-xs text-[#A19B91]">No transactions yet.</p>
+
+            {txLoading ? (
+              <div className="py-16 flex flex-col items-center justify-center gap-3 text-[#A19B91] text-xs">
+                <Loader2 className="w-6 h-6 animate-spin text-[#D4AF37]" />
+                <span>Loading ledger transactions…</span>
+              </div>
+            ) : txList.length === 0 ? (
+              <div className="py-16 text-center">
+                <ArrowLeftRight className="w-10 h-10 text-[#D4AF37]/30 mx-auto mb-3" />
+                <p className="text-sm font-semibold text-white">No transactions found</p>
+                <p className="text-xs text-[#A19B91] mt-1">Try changing your search or filter criteria.</p>
+                <button 
+                  onClick={() => setShowModal(true)}
+                  className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#D4AF37] text-[#080706] text-xs font-bold uppercase tracking-wider"
+                >
+                  <Plus className="w-3.5 h-3.5" /> Add Transaction
+                </button>
               </div>
             ) : (
-              <div className="divide-y divide-[#D4AF37]/8">
+              <div className="divide-y divide-[#D4AF37]/10">
                 {txList.map(tx => {
                   const Icon  = catIcon[tx.category] || Coins;
                   const color = catColor[tx.category] || '#D4AF37';
                   const isInc = tx.type === 'income';
                   const isSav = tx.type === 'saving';
                   return (
-                    <div key={tx._id}
-                      className="grid grid-cols-[1fr_auto_auto_auto_auto] items-center gap-4 px-5 py-3 hover:bg-[#D4AF37]/4 transition-all cursor-pointer group">
-                      <div className="flex items-center gap-3 min-w-0">
-                        <div className="w-8 h-8 rounded-xl flex-shrink-0 flex items-center justify-center border"
-                          style={{ background:`${color}15`, borderColor:`${color}30` }}>
-                          <Icon className="w-3.5 h-3.5" style={{ color }} />
+                    <div
+                      key={tx._id}
+                      className="grid grid-cols-[1.8fr_1.1fr_1fr_1fr_auto] items-center gap-4 px-6 py-4 hover:bg-[#D4AF37]/5 transition-all group"
+                    >
+                      {/* Description & Merchant */}
+                      <div className="flex items-center gap-3.5 min-w-0">
+                        <div
+                          className="w-9 h-9 rounded-xl flex-shrink-0 flex items-center justify-center border"
+                          style={{ background:`${color}15`, borderColor:`${color}35` }}
+                        >
+                          <Icon className="w-4 h-4" style={{ color }} />
                         </div>
                         <div className="min-w-0">
-                          <p className="text-xs font-medium text-white truncate group-hover:text-[#E6C667] transition-colors">{tx.title}</p>
-                          <p className="text-[9px] text-[#A19B91] truncate">{tx.merchant}</p>
+                          <p className="text-xs font-medium text-white truncate group-hover:text-[#E6C667] transition-colors">
+                            {tx.title}
+                          </p>
+                          <p className="text-[10px] text-[#A19B91] truncate">{tx.merchant || 'General'}</p>
                         </div>
                       </div>
-                      <span className="text-[9px] text-[#A19B91] border border-[#D4AF37]/15 px-2 py-0.5 rounded bg-[#080706]/60 whitespace-nowrap">{tx.category}</span>
-                      <span className="text-[9px] text-[#A19B91] border border-[#D4AF37]/15 px-2 py-0.5 rounded bg-[#080706]/60 whitespace-nowrap capitalize">{tx.accountType}</span>
-                      <span className="text-[10px] text-[#A19B91] whitespace-nowrap">{formatDate(tx.date)}</span>
-                      <span className={`text-sm font-bold font-serif whitespace-nowrap text-right ${
-                        isInc ? 'text-emerald-400' : isSav ? 'text-[#E6C667]' : 'text-white'
-                      }`} style={{ fontFamily:'"Playfair Display",Georgia,serif' }}>
-                        {isInc ? '+' : isSav ? '⊕' : '-'}{fmtFull(tx.amount)}
-                      </span>
+
+                      {/* Category */}
+                      <div>
+                        <span className="text-[10px] font-medium text-[#D4AF37] border border-[#D4AF37]/20 px-2.5 py-1 rounded-full bg-[#080706]/70 whitespace-nowrap">
+                          {tx.category}
+                        </span>
+                      </div>
+
+                      {/* Date */}
+                      <div className="text-xs text-[#A19B91] whitespace-nowrap">
+                        {formatDate(tx.date)}
+                      </div>
+
+                      {/* Amount */}
+                      <div className="text-right">
+                        <span
+                          className={`text-sm font-bold font-serif whitespace-nowrap ${
+                            isInc ? 'text-emerald-400' : isSav ? 'text-[#E6C667]' : 'text-white'
+                          }`}
+                          style={{ fontFamily:'"Playfair Display",Georgia,serif' }}
+                        >
+                          {isInc ? '+' : isSav ? '⊕' : '-'}{fmtFull(tx.amount)}
+                        </span>
+                      </div>
+
+                      {/* Edit button */}
+                      <div className="flex items-center">
+                        <button
+                          onClick={() => setEditingTx(tx)}
+                          className="w-7 h-7 rounded-lg flex items-center justify-center border border-[#D4AF37]/20 text-[#A19B91] hover:text-[#E6C667] hover:border-[#D4AF37]/50 hover:bg-[#D4AF37]/10 transition-all opacity-0 group-hover:opacity-100"
+                          title="Edit transaction"
+                        >
+                          <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                          </svg>
+                        </button>
+                      </div>
                     </div>
                   );
                 })}
               </div>
             )}
+
+            {/* Table Footer */}
             {txList.length > 0 && (
-              <div className="flex items-center justify-between px-5 py-3 border-t border-[#D4AF37]/10 text-[10px] text-[#A19B91]">
-                <span>{txList.length} transaction{txList.length !== 1 ? 's' : ''} shown</span>
-                <button className="flex items-center gap-1.5 text-[#D4AF37] hover:text-[#E6C667] font-semibold group transition-colors">
-                  Export CSV <Download className="w-3 h-3 group-hover:translate-y-0.5 transition-transform" />
+              <div className="flex items-center justify-between px-6 py-4 border-t border-[#D4AF37]/15 bg-[#080706]/40 text-xs text-[#A19B91]">
+                <span>Showing <strong>{txList.length}</strong> of <strong>{txList.length}</strong> transactions</span>
+                <button 
+                  onClick={() => {
+                    if (txList.length === 0) return;
+                    const headers = ['Title', 'Merchant', 'Category', 'Type', 'Amount (INR)', 'Date'];
+                    const rows = txList.map(t => [
+                      `"${t.title.replace(/"/g, '""')}"`,
+                      `"${(t.merchant || '').replace(/"/g, '""')}"`,
+                      `"${t.category}"`,
+                      `"${t.type}"`,
+                      t.amount,
+                      `"${formatDate(t.date)}"`
+                    ]);
+                    const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+                    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                    const url = URL.createObjectURL(blob);
+                    const link = document.createElement('a');
+                    link.setAttribute('href', url);
+                    link.setAttribute('download', `SpendWise_Ledger_${new Date().toISOString().split('T')[0]}.csv`);
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                  }}
+                  className="flex items-center gap-1.5 text-[#D4AF37] hover:text-[#FFF4D0] font-semibold group transition-colors"
+                >
+                  Export CSV <Download className="w-3.5 h-3.5 group-hover:translate-y-0.5 transition-transform" />
                 </button>
               </div>
             )}
           </div>
+
         </section>
+
+        {/* ── Sovereign Footer ──────────────────────────────────────────────── */}
+        <footer className="pt-6 pb-10 border-t border-[#D4AF37]/15 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-[#736B5E]">
+          <div className="flex items-center gap-2">
+            <span className="w-1.5 h-1.5 rounded-full bg-[#D4AF37] shadow-[0_0_6px_#D4AF37]" />
+            <span className="font-semibold text-[#A19B91]">SpendWise Sovereign Wealth</span>
+            <span>• Encrypted Personal Finance Intelligence</span>
+          </div>
+          <div className="flex items-center gap-4 text-[11px] text-[#A19B91]">
+            <span>© 2026 SpendWise</span>
+            <span>•</span>
+            <span>Privacy &amp; Security Protocol</span>
+          </div>
+        </footer>
 
       </main>
     </div>
   );
 }
 
-// Need TrendingDown for analytics section
-function TrendingDown(props) {
-  return (
-    <svg {...props} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="23 18 13.5 8.5 8.5 13.5 1 6" />
-      <polyline points="17 18 23 18 23 12" />
-    </svg>
-  );
-}
