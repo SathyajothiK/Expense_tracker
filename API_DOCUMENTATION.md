@@ -1,7 +1,7 @@
-# GridZero Expense Tracker - Backend API Documentation
+# SpendWise Privé — Backend API Documentation
 
 ## Overview
-Complete REST API backend for the GridZero Expense Tracker built with Node.js/Express and MongoDB.
+Complete REST API backend for the **SpendWise Privé — Sovereign Wealth Management Protocol** built with Node.js/Express and MongoDB.
 
 ## Architecture
 

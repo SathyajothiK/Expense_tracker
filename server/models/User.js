@@ -24,6 +24,14 @@ const userSchema = new mongoose.Schema(
       required: [true, 'Please provide a password'],
       minlength: [6, 'Password should be at least 6 characters'],
       select: false
+    },
+    savingsTarget: {
+      type: Number,
+      default: 50000
+    },
+    currency: {
+      type: String,
+      default: 'INR (₹)'
     }
   },
   { timestamps: true }

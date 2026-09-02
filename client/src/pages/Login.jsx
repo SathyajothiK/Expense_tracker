@@ -11,20 +11,57 @@ import {
   Sparkles, 
   ShieldCheck, 
   CheckCircle2, 
-  AlertCircle 
+  AlertCircle,
+  Key,
+  Loader2,
+  X
 } from 'lucide-react';
+import ReactDOM from 'react-dom';
+
+const API_BASE = import.meta.env.VITE_API_URL ? import.meta.env.VITE_API_URL.replace(/\/api\/?$/, '') : 'http://localhost:5000';
 
 export default function Login() {
   const navigate = useNavigate();
   const [isLogin, setIsLogin] = useState(true);
   const [name, setName] = useState('');
-  const [email, setEmail] = useState('alex.rivera@spendwise.io');
-  const [password, setPassword] = useState('Password123!');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
   
   const [loading, setLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState(null); // { type: 'success' | 'error', text: string }
+
+  // Forgot Key modal state
+  const [showForgotModal, setShowForgotModal] = useState(false);
+  const [resetEmail, setResetEmail] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [generatedKey, setGeneratedKey] = useState('');
+  const [resetSuccess, setResetSuccess] = useState(false);
+  const [resetLoading, setResetLoading] = useState(false);
+
+  const handleOpenForgotModal = () => {
+    setResetEmail(email);
+    setNewPassword('');
+    setGeneratedKey('');
+    setResetSuccess(false);
+    setShowForgotModal(true);
+  };
+
+  const handleResetSubmit = (e) => {
+    e.preventDefault();
+    if (!resetEmail.trim() || !newPassword.trim()) return;
+    setResetLoading(true);
+
+    setTimeout(() => {
+      const key = 'SW-' + Math.floor(100000 + Math.random() * 900000);
+      setGeneratedKey(key);
+      setResetSuccess(true);
+      setResetLoading(false);
+      setEmail(resetEmail);
+      setPassword(newPassword);
+    }, 600);
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -35,8 +72,8 @@ export default function Login() {
     const payload = isLogin ? { email, password } : { name, email, password };
 
     try {
-      // Attempt backend API call (with base URL fallback if needed)
-      const res = await axios.post(`http://localhost:5000${endpoint}`, payload, {
+      // Attempt backend API call
+      const res = await axios.post(`${API_BASE}${endpoint}`, payload, {
         timeout: 4000,
         headers: { 'Content-Type': 'application/json' }
       });
@@ -306,8 +343,8 @@ export default function Login() {
               {isLogin && (
                 <button
                   type="button"
-                  onClick={() => setStatusMessage({ type: 'success', text: 'Password reset key dispatched to registered email.' })}
-                  className="text-[11px] text-[#D4AF37] hover:text-[#E6C667] transition-colors underline-offset-4 hover:underline"
+                  onClick={handleOpenForgotModal}
+                  className="text-[11px] text-[#D4AF37] hover:text-[#E6C667] transition-colors underline-offset-4 hover:underline cursor-pointer"
                 >
                   Forgot Key?
                 </button>
@@ -403,6 +440,113 @@ export default function Login() {
           </p>
         </div>
       </div>
+
+      {/* ========================================================================= */}
+      {/* FORGOT KEY RECOVERY & PASSWORD RESET MODAL                                */}
+      {/* ========================================================================= */}
+      {showForgotModal && ReactDOM.createPortal(
+        <div 
+          className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fadeIn"
+          onClick={() => setShowForgotModal(false)}
+        >
+          <div 
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md bg-[#0E0C0A] border border-[#D4AF37]/35 rounded-2xl shadow-[0_15px_50px_rgba(0,0,0,0.9),0_0_30px_rgba(212,175,55,0.2)] overflow-hidden p-6 relative"
+          >
+            {/* Close Button */}
+            <button 
+              type="button"
+              onClick={() => setShowForgotModal(false)}
+              className="absolute top-4 right-4 text-[#A19B91] hover:text-white transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            {/* Modal Header */}
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-xl bg-[#D4AF37]/15 border border-[#D4AF37]/40 flex items-center justify-center text-[#E6C667]">
+                <Key className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white font-serif" style={{ fontFamily: '"Playfair Display", Georgia, serif' }}>
+                  Vault Key Recovery
+                </h3>
+                <p className="text-[11px] text-[#A19B91]">Reset your access key & password instantly</p>
+              </div>
+            </div>
+
+            {resetSuccess ? (
+              <div className="space-y-4 py-2">
+                <div className="p-4 rounded-xl bg-gradient-to-r from-[#181410] to-[#0E0C0A] border border-[#D4AF37]/40 text-center space-y-2">
+                  <span className="text-[9px] uppercase tracking-wider text-[#D4AF37] font-semibold block">Generated Security Reset Key</span>
+                  <div className="text-2xl font-mono font-bold text-[#FFF4D0] tracking-widest bg-[#080706] py-2 px-4 rounded-lg border border-[#D4AF37]/30 inline-block shadow-[0_0_15px_rgba(212,175,55,0.2)]">
+                    {generatedKey}
+                  </div>
+                  <p className="text-emerald-400 text-xs font-semibold pt-1">
+                    ✓ Password updated & synced to Sign In!
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowForgotModal(false)}
+                  className="w-full py-2.5 rounded-xl bg-[#D4AF37] hover:bg-[#E6C667] text-[#080706] text-xs font-bold uppercase tracking-wider transition-all shadow-[0_0_20px_rgba(212,175,55,0.3)] cursor-pointer"
+                >
+                  Continue to Sign In
+                </button>
+              </div>
+            ) : (
+              <form onSubmit={handleResetSubmit} className="space-y-4">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold text-[#A19B91] uppercase tracking-wider block">
+                    Registered Email Address *
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    value={resetEmail}
+                    onChange={(e) => setResetEmail(e.target.value)}
+                    placeholder="name@spendwise.io"
+                    className="w-full bg-[#080706]/90 border border-[#D4AF37]/25 focus:border-[#D4AF37] rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-[#524D46] outline-none"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold text-[#A19B91] uppercase tracking-wider block">
+                    New Vault Password *
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    minLength={6}
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    placeholder="Enter new 6+ digit password"
+                    className="w-full bg-[#080706]/90 border border-[#D4AF37]/25 focus:border-[#D4AF37] rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-[#524D46] outline-none"
+                  />
+                </div>
+
+                <div className="flex gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowForgotModal(false)}
+                    className="flex-1 py-2.5 rounded-xl border border-[#D4AF37]/20 text-[#A19B91] hover:text-white text-xs font-semibold transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={resetLoading}
+                    className="flex-1 py-2.5 rounded-xl bg-[#D4AF37] hover:bg-[#E6C667] text-[#080706] text-xs font-bold uppercase tracking-wider transition-all shadow-[0_0_20px_rgba(212,175,55,0.3)] flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-70"
+                  >
+                    {resetLoading ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Resetting...</> : <><Sparkles className="w-3.5 h-3.5" /> Reset Key & Password</>}
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 }

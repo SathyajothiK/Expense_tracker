@@ -1,5 +1,5 @@
 /**
- * API Test Suite for GridZero Expense Tracker
+ * API Test Suite for SpendWise Privé — Sovereign Wealth Management Protocol
  * 
  * This file demonstrates and validates all API endpoints
  * Run with: node test-api.js

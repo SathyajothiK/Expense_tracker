@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import Navbar from '../components/Navbar';
 import {
@@ -10,7 +11,7 @@ import {
 } from 'lucide-react';
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
-const API_BASE = 'http://localhost:5000/api';
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 const getToken = () => localStorage.getItem('token');
 const api = () => axios.create({ baseURL: API_BASE, headers: { Authorization: `Bearer ${getToken()}` } });
 
@@ -57,10 +58,11 @@ function Sparkline({ id, positive = true }) {
 }
 
 // ─── Image 2 Style Spline Balance & Valuation Chart ──────────────────────────
-function Image3ValuationChart({ data, activeType = 'all' }) {
+function Image3ValuationChart({ data, totalBal, activeType = 'all' }) {
   const [hoverIndex, setHoverIndex] = useState(null);
 
-  // 12-Month Multipliers recreating the exact curve wave from Image 2
+  // 12-Month Multipliers recreating the curve wave
+  // July (index 6) = 1.00 → always equals exactly the current totalBal on the active/peak point
   const multipliers = [
     { m: 'Jan', top: 0.38, sec: 0.18 },
     { m: 'Feb', top: 0.44, sec: 0.16 },
@@ -68,7 +70,7 @@ function Image3ValuationChart({ data, activeType = 'all' }) {
     { m: 'Apr', top: 0.54, sec: 0.36 },
     { m: 'May', top: 0.66, sec: 0.28 },
     { m: 'Jun', top: 0.80, sec: 0.24 },
-    { m: 'Jul', top: 0.98, sec: 0.22 },
+    { m: 'Jul', top: 1.00, sec: 0.22 },
     { m: 'Aug', top: 0.86, sec: 0.14 },
     { m: 'Sep', top: 0.64, sec: 0.12 },
     { m: 'Oct', top: 0.58, sec: 0.18 },
@@ -76,18 +78,24 @@ function Image3ValuationChart({ data, activeType = 'all' }) {
     { m: 'Dec', top: 0.62, sec: 0.20 },
   ];
 
-  // Base scale from actual account balance if available, else 20000
-  const baseScale = (data && data.length > 0 && (data[0]?.balance || data[0]?.amount))
-    ? Math.abs(data[0].balance || data[0].amount)
-    : 20000;
+  // Determine if there is real financial data to visualize
+  const hasRealData = (totalBal && totalBal > 0) ||
+    (data && data.length > 0 && data.some(d => Math.abs(d.balance || d.amount || 0) > 0));
+
+  // Base scale: use actual totalBal if non-zero, else derive from timeline data
+  const baseScale = totalBal && totalBal > 0
+    ? totalBal
+    : (data && data.length > 0)
+      ? Math.max(...data.map(d => Math.abs(d.balance || d.amount || 0)))
+      : 0;
 
   const chartData = multipliers.map(item => {
-    let topVal = item.top * baseScale;
-    let secVal = item.sec * baseScale;
+    let topVal = hasRealData ? item.top * baseScale : 0;
+    let secVal = hasRealData ? item.sec * baseScale : 0;
 
-    if (activeType === 'income') {
+    if (hasRealData && activeType === 'income') {
       topVal = item.top * baseScale * 1.25;
-    } else if (activeType === 'expense') {
+    } else if (hasRealData && activeType === 'expense') {
       topVal = item.top * baseScale * 0.45;
       secVal = item.sec * baseScale * 0.25;
     }
@@ -147,10 +155,24 @@ function Image3ValuationChart({ data, activeType = 'all' }) {
         style={{ background: 'radial-gradient(circle at 80% 20%, rgba(234, 88, 12, 0.28) 0%, rgba(212, 175, 55, 0.12) 40%, transparent 70%)' }} />
       <div className="absolute inset-0 pointer-events-none opacity-20 bg-[radial-gradient(#ea580c_1px,transparent_1px)] [background-size:22px_22px] rounded-2xl overflow-hidden" />
 
+      {/* Empty State Overlay — shown when there's no transaction data */}
+      {!hasRealData && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center z-10 pointer-events-none gap-2">
+          <div className="w-10 h-10 rounded-full bg-[#D4AF37]/10 border border-[#D4AF37]/30 flex items-center justify-center mb-1">
+            <svg className="w-5 h-5 text-[#D4AF37]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+            </svg>
+          </div>
+          <p className="text-[11px] font-bold text-[#E6C667] tracking-wide">No Valuation Data</p>
+          <p className="text-[10px] text-[#A19B91] text-center px-4">Add income or expense transactions to see your consolidated wealth curve.</p>
+        </div>
+      )}
+
       <svg 
         className="w-full h-full overflow-visible" 
         viewBox={`0 0 ${W} ${H}`} 
         preserveAspectRatio="none"
+
       >
         <defs>
           {/* Main Area Glow Gradient */}
@@ -305,8 +327,8 @@ function Image3ValuationChart({ data, activeType = 'all' }) {
         })}
       </svg>
 
-      {/* Floating Tooltip (Fully visible, not clipped) */}
-      {activePoint && (
+      {/* Floating Tooltip — only shown when real data exists */}
+      {activePoint && hasRealData && (
         <div 
           className="absolute pointer-events-none transition-all duration-200 transform -translate-x-1/2 -translate-y-full -mt-3 z-20"
           style={{ 
@@ -316,7 +338,7 @@ function Image3ValuationChart({ data, activeType = 'all' }) {
         >
           <div className="relative bg-[#181410]/95 border border-[#ea580c]/60 rounded-xl px-3.5 py-2 shadow-[0_4px_25px_rgba(234,88,12,0.35)] backdrop-blur-md flex flex-col items-center">
             <span className="text-[9px] uppercase tracking-wider text-[#A19B91] font-semibold whitespace-nowrap">
-              {activePoint.label} 2026
+              {activePoint.label} {new Date().getFullYear()}
             </span>
             <span className="text-xs font-bold text-[#FFF4D0] font-serif whitespace-nowrap mt-0.5" style={{ fontFamily:'"Playfair Display",Georgia,serif' }}>
               {fmtFull(activePoint.val)}
@@ -804,6 +826,9 @@ function EditTxModal({ tx, onClose, onSuccess }) {
 
 // ─── Main Dashboard ────────────────────────────────────────────────────────────
 export default function Dashboard() {
+  const location       = useLocation();
+  const navigate       = useNavigate();
+
   const homeRef        = useRef(null);
   const analyticsRef   = useRef(null);
   const budgetRef      = useRef(null);
@@ -829,8 +854,13 @@ export default function Dashboard() {
   const [showModal,    setShowModal]    = useState(false);
   const [editingTx,    setEditingTx]    = useState(null);
 
-  let user = { name:'User' };
-  try { const s = localStorage.getItem('user'); if (s) user = JSON.parse(s); } catch (_) {}
+  const [user, setUser] = useState(() => {
+    try { 
+      const s = localStorage.getItem('user'); 
+      if (s) return JSON.parse(s); 
+    } catch (_) {}
+    return { name: 'Satya' };
+  });
 
   // ── API fetchers ────────────────────────────────────────────────────────────
   const loadAccounts = useCallback(async () => {
@@ -862,7 +892,10 @@ export default function Dashboard() {
 
   const loadAll = useCallback(async () => {
     setPageLoading(true); setPageError('');
-    if (!getToken()) { setPageError('Please sign in to continue.'); setPageLoading(false); return; }
+    if (!getToken()) { 
+      navigate('/login', { replace: true }); 
+      return; 
+    }
     await Promise.all([loadAccounts(), loadInsights(), loadTimeline(timeRange), loadTransactions(txFilter, txSearch)]);
     setPageLoading(false);
   }, [loadAccounts, loadInsights, loadTimeline, loadTransactions, timeRange, txFilter, txSearch]);
@@ -871,7 +904,30 @@ export default function Dashboard() {
   useEffect(() => { loadTransactions(txFilter, txSearch); }, [txFilter, txSearch]);
   useEffect(() => { loadTimeline(timeRange); }, [timeRange]);
 
-  // ── Scroll Spy to auto-sync Navbar activeTab with scroll position ─────────
+  // ── Auto-scroll to section based on URL path when page loads/reloads ────────
+  useEffect(() => {
+    if (!pageLoading) {
+      if (location.pathname === '/dashboard' || location.pathname === '/') {
+        setActiveTab('Home');
+        window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+      } else {
+        const pathMap = {
+          '/analytics': { ref: analyticsRef, tab: 'Analytics' },
+          '/budget': { ref: budgetRef, tab: 'Budget' },
+          '/transactions': { ref: txRef, tab: 'Transactions' },
+        };
+        const match = pathMap[location.pathname];
+        if (match) {
+          setActiveTab(match.tab);
+          setTimeout(() => {
+            match.ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }, 150);
+        }
+      }
+    }
+  }, [location.pathname, pageLoading]);
+
+  // ── Scroll Spy to auto-sync Navbar activeTab and URL path with scroll ────────
   useEffect(() => {
     const handleScroll = () => {
       const scrollPos = window.scrollY + 180;
@@ -879,14 +935,23 @@ export default function Dashboard() {
       const budgetTop = budgetRef.current?.offsetTop || 99999;
       const txTop = txRef.current?.offsetTop || 99999;
 
+      let newTab = 'Home';
+      let newPath = '/dashboard';
+
       if (scrollPos >= txTop - 80) {
-        setActiveTab('Transactions');
+        newTab = 'Transactions';
+        newPath = '/transactions';
       } else if (scrollPos >= budgetTop - 80) {
-        setActiveTab('Budget');
+        newTab = 'Budget';
+        newPath = '/budget';
       } else if (scrollPos >= analyticsTop - 80) {
-        setActiveTab('Analytics');
-      } else {
-        setActiveTab('Home');
+        newTab = 'Analytics';
+        newPath = '/analytics';
+      }
+
+      setActiveTab(newTab);
+      if (window.location.pathname !== newPath) {
+        window.history.replaceState(null, '', newPath);
       }
     };
 
@@ -898,8 +963,16 @@ export default function Dashboard() {
   // ── Smooth scroll nav ───────────────────────────────────────────────────────
   const scrollTo = (tab) => {
     setActiveTab(tab);
-    const map = { Home: homeRef, Analytics: analyticsRef, Budget: budgetRef, Transactions: txRef };
-    map[tab]?.current?.scrollIntoView({ behavior:'smooth', block:'start' });
+    const pathMap = { Home: '/dashboard', Analytics: '/analytics', Budget: '/budget', Transactions: '/transactions' };
+    if (pathMap[tab] && location.pathname !== pathMap[tab]) {
+      navigate(pathMap[tab]);
+    }
+    if (tab === 'Home') {
+      window.scrollTo({ top: 0, left: 0, behavior: 'smooth' });
+    } else {
+      const map = { Analytics: analyticsRef, Budget: budgetRef, Transactions: txRef };
+      map[tab]?.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
   };
 
   // ── Derived values ──────────────────────────────────────────────────────────
@@ -960,10 +1033,10 @@ export default function Dashboard() {
       {showModal && <AddTxModal onClose={() => setShowModal(false)} onSuccess={() => loadAll()} />}
       {editingTx && <EditTxModal tx={editingTx} onClose={() => setEditingTx(null)} onSuccess={() => { setEditingTx(null); loadAll(); }} />}
 
-      <Navbar activeTab={activeTab} onTabChange={scrollTo} />
+      <Navbar activeTab={activeTab} onTabChange={scrollTo} onProfileUpdate={(updated) => setUser(updated)} />
 
       {/* ── Scrollable page body ────────────────────────────────────────────── */}
-      <main className="flex-1 w-full max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 py-5 space-y-8">
+      <main className="flex-1 w-full px-4 sm:px-8 lg:px-12 py-6 space-y-8">
 
         {/* ══════════════════════════════════════════════════════════════════════
             SECTION 1 ─ HOME (Personal Finance / Consolidated Valuation)
@@ -988,14 +1061,14 @@ export default function Dashboard() {
             </div>
 
             {/* Right: Expanded Stat Cards & Add Transaction Button */}
-            <div className="flex items-center gap-3 sm:gap-3.5 flex-wrap">
+            <div className="flex-1 flex items-center justify-end gap-3 sm:gap-3.5 flex-wrap">
               {[
                 { label:'Total Income',  value: fmt(insights?.totalIncome ?? monthInc),  cls:'text-emerald-400', sub:'↑ Inflow' },
                 { label:'Total Expense', value: `-${fmt(insights?.totalExpense ?? monthExp)}`, cls:'text-white', sub:'Expenses' },
                 { label:'Total Savings', value: fmt(insights?.totalSavings ?? 0),        cls:'text-[#E6C667]',   sub:`★ ${saveRate}% Saved` },
                 { label:'Net Worth',     value: fmt(netWorth),                           cls:'text-[#818cf8]',   sub:'Total Capital' },
               ].map(item => (
-                <div key={item.label} className="bg-[#080706]/85 border border-[#D4AF37]/20 hover:border-[#D4AF37]/45 rounded-xl px-4 sm:px-5 py-2.5 min-w-[130px] sm:min-w-[145px] transition-all shadow-[0_2px_12px_rgba(0,0,0,0.4)]">
+                <div key={item.label} className="flex-1 min-w-[135px] sm:min-w-[155px] bg-[#080706]/85 border border-[#D4AF37]/20 hover:border-[#D4AF37]/45 rounded-xl px-4 sm:px-5 py-2.5 transition-all shadow-[0_2px_12px_rgba(0,0,0,0.4)]">
                   <span className="block text-[9px] uppercase tracking-wider text-[#A19B91] font-semibold mb-0.5">{item.label}</span>
                   <span className={`block text-sm sm:text-base font-bold font-serif leading-tight ${item.cls}`} style={{ fontFamily:'"Playfair Display",Georgia,serif' }}>
                     {item.value}
@@ -1006,7 +1079,7 @@ export default function Dashboard() {
 
               {/* Add Transaction Button */}
               <button onClick={() => setShowModal(true)}
-                className="flex items-center gap-1.5 px-5 py-3 rounded-xl bg-[#D4AF37] hover:bg-[#E6C667] text-[#080706] text-xs font-bold uppercase tracking-wider transition-all shadow-[0_0_18px_rgba(212,175,55,0.3)] flex-shrink-0">
+                className="flex items-center gap-1.5 px-5 py-3 rounded-xl bg-[#D4AF37] hover:bg-[#E6C667] text-[#080706] text-xs font-bold uppercase tracking-wider transition-all shadow-[0_0_18px_rgba(212,175,55,0.3)] flex-shrink-0 cursor-pointer">
                 <Plus className="w-4 h-4" /> Add Transaction
               </button>
             </div>
@@ -1015,8 +1088,8 @@ export default function Dashboard() {
           {/* ── TOP GRID: Budget Overview Radar (Left) + Expanded Consolidated Valuation (Right) ─ */}
           <div className="grid grid-cols-12 gap-5 items-stretch">
 
-            {/* ── LEFT: Budget Overview (Radar Polygon Chart) 4 cols ── */}
-            <div className="col-span-12 lg:col-span-4 flex flex-col justify-between rounded-2xl border border-[#D4AF37]/25 bg-[#0e0c0a]/80 backdrop-blur-xl p-5"
+            {/* ── LEFT: Budget Overview (Radar Polygon Chart) 3 cols ── */}
+            <div className="col-span-12 lg:col-span-3 flex flex-col justify-between rounded-2xl border border-[#D4AF37]/25 bg-[#0e0c0a]/80 backdrop-blur-xl p-5"
               style={{ boxShadow:'0 4px 30px rgba(0,0,0,0.6), inset 0 1px 0 rgba(212,175,55,0.06)' }}>
               <div className="flex items-center justify-between mb-2">
                 <div>
@@ -1037,7 +1110,7 @@ export default function Dashboard() {
               <div className="mt-4 pt-4 border-t border-[#D4AF37]/15 flex items-center justify-between">
                 <div>
                   <span className="text-[9px] uppercase tracking-wider text-[#A19B91] font-medium block">Total Allocation</span>
-                  <span className="text-xs text-[#E6C667]">7 Categories Active</span>
+                  <span className="text-xs text-[#E6C667]">{Object.keys(catTotals).length} Categories Active</span>
                 </div>
                 <div className="text-right">
                   <span className="text-[9px] uppercase tracking-wider text-[#A19B91] font-medium block">Total Expenses</span>
@@ -1048,8 +1121,8 @@ export default function Dashboard() {
               </div>
             </div>
 
-            {/* ── RIGHT: Expanded Consolidated Valuation (8 cols) ──────────── */}
-            <div className="col-span-12 lg:col-span-8 flex flex-col rounded-2xl border border-[#D4AF37]/25 bg-[#0e0c0a]/80 backdrop-blur-xl p-5 sm:p-6"
+            {/* ── RIGHT: Expanded Consolidated Valuation (9 cols) ──────────── */}
+            <div className="col-span-12 lg:col-span-9 flex flex-col rounded-2xl border border-[#D4AF37]/25 bg-[#0e0c0a]/80 backdrop-blur-xl p-5 sm:p-6"
               style={{ boxShadow:'0 4px 40px rgba(0,0,0,0.7), inset 0 1px 0 rgba(212,175,55,0.06)' }}>
 
               {/* Header Bar with Total Balance & Filter Buttons */}
@@ -1064,7 +1137,7 @@ export default function Dashboard() {
                       {fmtFull(totalBal || netWorth)}
                     </span>
                     <span className="text-[10px] font-semibold px-2.5 py-0.5 rounded-full text-emerald-400 bg-emerald-950/40 border border-emerald-500/30">
-                      ▲ {Math.abs(growth) || 12.5}%
+                      {growth >= 0 ? `▲ ${growth}%` : `▼ ${Math.abs(growth)}%`}
                     </span>
                   </div>
                 </div>
@@ -1110,7 +1183,7 @@ export default function Dashboard() {
 
               {/* Spline Chart */}
               <div className="flex-1 w-full mt-1">
-                <Image3ValuationChart data={timeline} activeType={chartMetric} />
+                <Image3ValuationChart data={timeline} totalBal={totalBal || netWorth} activeType={chartMetric} />
               </div>
 
               {/* Bottom Metrics Bar */}
@@ -1155,7 +1228,7 @@ export default function Dashboard() {
             <PieChart className="w-3.5 h-3.5 text-[#D4AF37]" />
           </div>
 
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-4 gap-4">
             {[
               { label:'Total Income',  value: insights?.totalIncome  ?? 0, color:'#4ade80', icon: TrendingUp   },
               { label:'Total Expense', value: insights?.totalExpense ?? 0, color:'#f87171', icon: TrendingDown  },
@@ -1179,7 +1252,7 @@ export default function Dashboard() {
             })}
           </div>
 
-          {/* ── Top Spending by Category (real data) ── */}
+          {/* ── Top Spending + Health Score Side-by-Side ── */}
           {(() => {
             const totalExp = txList.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
             const ranked = ALL_CATEGORIES
@@ -1187,7 +1260,9 @@ export default function Dashboard() {
               .filter(x => x.amount > 0)
               .sort((a, b) => b.amount - a.amount);
             const maxAmt = ranked[0]?.amount || 1;
-            return ranked.length === 0 ? null : (
+            return (
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+              {ranked.length > 0 && (
               <div className="rounded-2xl border border-[#D4AF37]/20 bg-[#0e0c0a]/80 backdrop-blur-xl px-6 py-5"
                 style={{ boxShadow:'0 2px 20px rgba(0,0,0,0.5)' }}>
                 <div className="flex items-center justify-between mb-4">
@@ -1235,41 +1310,58 @@ export default function Dashboard() {
                   })}
                 </div>
               </div>
+              )}
+
+              {/* Spending score bar — always shown in right column */}
+              <div className="rounded-2xl border border-[#D4AF37]/20 bg-[#0e0c0a]/80 backdrop-blur-xl px-6 py-5"
+                style={{ boxShadow:'0 2px 20px rgba(0,0,0,0.5)' }}>
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <span className="text-[10px] uppercase tracking-wider text-[#A19B91] font-semibold">Spending Health Score</span>
+                    <p className="text-[9px] text-[#A19B91] mt-0.5">Based on your income vs expense ratio</p>
+                  </div>
+                  <span className="text-3xl font-bold text-[#E6C667] font-serif"
+                    style={{ fontFamily:'"Playfair Display",Georgia,serif' }}>
+                    {score}<span className="text-base text-[#A19B91] font-normal">/100</span>
+                  </span>
+                </div>
+                <div className="w-full h-2.5 rounded-full bg-[#080706] border border-[#D4AF37]/15 overflow-hidden">
+                  <div className="h-full rounded-full transition-all duration-1000"
+                    style={{
+                      width:`${score}%`,
+                      background: score > 70 ? 'linear-gradient(90deg, #065f46, #4ade80)'
+                                : score > 40 ? 'linear-gradient(90deg, #78350f, #D4AF37)'
+                                : 'linear-gradient(90deg, #7f1d1d, #f87171)',
+                    }} />
+                </div>
+                {insights?.adviceChips?.length > 0 && (
+                  <div className="flex flex-wrap gap-2 mt-4 pt-3 border-t border-[#D4AF37]/10">
+                    {insights.adviceChips.map((chip, i) => (
+                      <span key={i} className="text-[10px] text-[#E6C667] bg-[#D4AF37]/10 border border-[#D4AF37]/20 rounded-full px-3 py-1">
+                        💡 {chip}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {/* Finance Score Visual Ring */}
+                <div className="mt-6 pt-4 border-t border-[#D4AF37]/10 grid grid-cols-3 gap-3 text-center">
+                  <div>
+                    <span className="block text-[8px] uppercase tracking-wider text-[#A19B91] font-medium">Monthly In</span>
+                    <span className="block text-xs font-bold text-emerald-400 font-serif mt-0.5" style={{ fontFamily:'"Playfair Display",Georgia,serif' }}>{fmt(monthInc)}</span>
+                  </div>
+                  <div>
+                    <span className="block text-[8px] uppercase tracking-wider text-[#A19B91] font-medium">Monthly Out</span>
+                    <span className="block text-xs font-bold text-red-400 font-serif mt-0.5" style={{ fontFamily:'"Playfair Display",Georgia,serif' }}>{fmt(monthExp)}</span>
+                  </div>
+                  <div>
+                    <span className="block text-[8px] uppercase tracking-wider text-[#A19B91] font-medium">Save Rate</span>
+                    <span className="block text-xs font-bold text-[#D4AF37] font-serif mt-0.5" style={{ fontFamily:'"Playfair Display",Georgia,serif' }}>{saveRate}%</span>
+                  </div>
+                </div>
+              </div>
+            </div>
             );
           })()}
-
-          {/* Spending score bar */}
-          <div className="rounded-2xl border border-[#D4AF37]/20 bg-[#0e0c0a]/80 backdrop-blur-xl px-6 py-5"
-            style={{ boxShadow:'0 2px 20px rgba(0,0,0,0.5)' }}>
-            <div className="flex items-center justify-between mb-3">
-              <div>
-                <span className="text-[10px] uppercase tracking-wider text-[#A19B91] font-semibold">Spending Health Score</span>
-                <p className="text-[9px] text-[#A19B91] mt-0.5">Based on your income vs expense ratio</p>
-              </div>
-              <span className="text-3xl font-bold text-[#E6C667] font-serif"
-                style={{ fontFamily:'"Playfair Display",Georgia,serif' }}>
-                {score}<span className="text-base text-[#A19B91] font-normal">/100</span>
-              </span>
-            </div>
-            <div className="w-full h-2.5 rounded-full bg-[#080706] border border-[#D4AF37]/15 overflow-hidden">
-              <div className="h-full rounded-full transition-all duration-1000"
-                style={{
-                  width:`${score}%`,
-                  background: score > 70 ? 'linear-gradient(90deg, #065f46, #4ade80)'
-                            : score > 40 ? 'linear-gradient(90deg, #78350f, #D4AF37)'
-                            : 'linear-gradient(90deg, #7f1d1d, #f87171)',
-                }} />
-            </div>
-            {insights?.adviceChips?.length > 0 && (
-              <div className="flex flex-wrap gap-2 mt-4 pt-3 border-t border-[#D4AF37]/10">
-                {insights.adviceChips.map((chip, i) => (
-                  <span key={i} className="text-[10px] text-[#E6C667] bg-[#D4AF37]/10 border border-[#D4AF37]/20 rounded-full px-3 py-1">
-                    💡 {chip}
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
         </section>
 
         {/* ══════════════════════════════════════════════════════════════════════
@@ -1288,7 +1380,7 @@ export default function Dashboard() {
                 No expense transactions yet. Add some to see your budget breakdown.
               </p>
             ) : (
-              <div className="grid grid-cols-4 sm:grid-cols-4 lg:grid-cols-8 gap-3">
+              <div className="grid grid-cols-4 sm:grid-cols-5 lg:grid-cols-8 xl:grid-cols-9 gap-3">
                 {ALL_CATEGORIES.map(cat => {
                   const Icon  = catIcon[cat] || Coins;
                   const color = catColor[cat] || '#D4AF37';

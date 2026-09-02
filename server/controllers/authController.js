@@ -132,6 +132,49 @@ exports.getMe = async (req, res) => {
         id: user._id,
         name: user.name,
         email: user.email,
+        savingsTarget: user.savingsTarget || 50000,
+        currency: user.currency || 'INR (₹)',
+        createdAt: user.createdAt
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
+
+// @desc    Update logged-in user profile
+// @route   PUT /api/auth/profile
+// @access  Private
+exports.updateProfile = async (req, res) => {
+  try {
+    const { name, email, savingsTarget, currency } = req.body;
+    const user = await User.findById(req.user.id);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    if (name) user.name = name;
+    if (email) user.email = email;
+    if (savingsTarget !== undefined) user.savingsTarget = savingsTarget;
+    if (currency) user.currency = currency;
+
+    await user.save();
+
+    res.status(200).json({
+      success: true,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        savingsTarget: user.savingsTarget,
+        currency: user.currency,
         createdAt: user.createdAt
       }
     });
