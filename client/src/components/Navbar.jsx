@@ -10,7 +10,8 @@ import {
   ShieldCheck, 
   User as UserIcon,
   Bell,
-  ChevronDown
+  ChevronDown,
+  Mail
 } from 'lucide-react';
 import NotificationsModal from './NotificationsModal';
 import ProfileModal from './ProfileModal';
@@ -64,6 +65,7 @@ export default function Navbar({ activeTab = 'Home', onTabChange, onProfileUpdat
     { name: 'Analytics', icon: PieChart, path: '/analytics' },
     { name: 'Budget', icon: Wallet, path: '/budget' },
     { name: 'Transactions', icon: ArrowLeftRight, path: '/transactions' },
+    { name: 'Contact', icon: Mail, path: '/contact' },
   ];
 
   const handleSignOut = () => {

@@ -2,6 +2,7 @@ import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
+import Contact from './pages/Contact';
 import { CurrencyProvider } from './context/CurrencyContext';
 
 function ProtectedRoute({ children }) {
@@ -20,6 +21,7 @@ function App() {
           <Route path="/"            element={<Login />} />
           <Route path="/login"       element={<Login />} />
           <Route path="/register"    element={<Login />} />
+          <Route path="/contact"     element={<Contact />} />
           <Route path="/dashboard"   element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
           <Route path="/analytics"   element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
           <Route path="/budget"      element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
